@@ -1,0 +1,6 @@
+{
+  "name": "SMM Algorithmic Drip & Anti-Detection Automation Engine",
+  "description": "Enterprise-grade 24/7 SMM autonomous campaign scheduler featuring anti-detection algorithmic curves, multi-provider SMM v2 protocol routing gateway, jitter variance, and parent panel management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

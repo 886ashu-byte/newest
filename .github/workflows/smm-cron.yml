@@ -1,0 +1,14 @@
+name: SMM Autonomous Scheduler Heartbeat
+on:
+  schedule:
+    # Runs every 5 minutes (GitHub Actions minimum schedule interval)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger SMM Scheduler Tick
+        run: |
+          curl -s -X POST "${{ secrets.VERCEL_APP_URL || 'https://your-app.vercel.app' }}/api/scheduler/tick"
