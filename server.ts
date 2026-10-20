@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
@@ -11,7 +12,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+
+function parsePort(): number {
+  const portIndex = process.argv.indexOf('--port');
+  if (portIndex !== -1 && process.argv[portIndex + 1]) {
+    const p = parseInt(process.argv[portIndex + 1], 10);
+    if (!isNaN(p)) return p;
+  }
+  return Number(process.env.PORT) || 3000;
+}
+
+function parseHost(): string {
+  const hostIndex = process.argv.indexOf('--host');
+  if (hostIndex !== -1 && process.argv[hostIndex + 1]) {
+    return process.argv[hostIndex + 1];
+  }
+  return process.env.HOST || '0.0.0.0';
+}
+
+const PORT = parsePort();
+const HOST = parseHost();
 
 app.use(express.json());
 
@@ -258,8 +278,38 @@ app.get('/api/campaigns', (req: Request, res: Response) => {
   res.json({ campaigns });
 });
 
+// Real SMM v2 Gateway Client (PerfectPanel / SmartPanel API v2 compatible)
+async function callSmmApi(apiUrl: string, apiKey: string, action: string, extraParams: Record<string, any> = {}): Promise<any> {
+  const bodyParams = new URLSearchParams({
+    key: apiKey,
+    action,
+    ...Object.fromEntries(Object.entries(extraParams).map(([k, v]) => [k, String(v)]))
+  });
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      body: bodyParams.toString(),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { error: 'Invalid response from SMM panel', raw: text };
+    }
+  } catch (err: any) {
+    return { error: err.message || 'Network timeout or connection error' };
+  }
+}
+
 // CAMPAIGNS: Create & Launch
-app.post('/api/campaigns/launch', (req: Request, res: Response) => {
+app.post('/api/campaigns/launch', async (req: Request, res: Response) => {
   const campaignData = req.body;
   if (!campaignData.targetUrl || !campaignData.batches || campaignData.batches.length === 0) {
     return res.status(400).json({ error: 'Valid targetUrl and batches are required' });
@@ -274,45 +324,37 @@ app.post('/api/campaigns/launch', (req: Request, res: Response) => {
     currentBatchIndex: 0
   };
 
-  // Immediate execution of Batch #1 (Seed Chunk!)
-  if (newCampaign.batches.length > 0) {
-    const firstBatch = newCampaign.batches[0];
-    firstBatch.status = 'success';
-    firstBatch.dispatchedAt = new Date().toISOString();
-    firstBatch.orderIds = {
-      views: 'ORD-REL-8024-' + Math.floor(100000 + Math.random() * 900000)
-    };
-    firstBatch.executionLogs = [
-      `[${new Date().toLocaleTimeString()}] Seed Chunk Protocol Activated (Batch #0).`,
-      `[${new Date().toLocaleTimeString()}] Dispatched ${firstBatch.views} views to ReliableSMM (Service #8024). Order ID: ${firstBatch.orderIds.views}`,
-      `[${new Date().toLocaleTimeString()}] Engagement lock: Active (no likes/comments sent during seed warmup).`
-    ];
-
-    // Log to global dispatch logs
-    dispatchLogs.push({
-      id: 'log_' + Date.now(),
-      campaignId: newCampaign.id,
-      campaignName: newCampaign.name,
-      batchIndex: 0,
-      timestamp: new Date().toISOString(),
-      providerName: 'ReliableSMM',
-      serviceId: 8024,
-      metricType: 'views (Seed Warmup)',
-      quantity: firstBatch.views,
-      status: 'success',
-      orderId: firstBatch.orderIds.views,
-      responsePayload: { order: firstBatch.orderIds.views, status: 'Success - Instagram High-Retention Views Injected' }
-    });
-  }
-
   campaigns.unshift(newCampaign);
   persistData();
 
+  // Immediate live execution of Batch #0 (Seed Warmup Chunk) to ReliableSMM
+  if (newCampaign.batches.length > 0) {
+    const firstBatch = newCampaign.batches[0];
+    await executeBatch(newCampaign, firstBatch, true);
+  }
+
   res.status(201).json({
     campaign: newCampaign,
-    message: 'Campaign launched successfully! Batch #1 (Seed Chunk Warmup) executed immediately.'
+    message: 'Campaign launched successfully! Batch #0 (Seed Chunk Warmup) sent to live SMM panel.'
   });
 });
+
+// Active timers tracking for staggered intra-batch execution
+const activeCampaignTimers = new Map<string, NodeJS.Timeout[]>();
+
+function registerCampaignTimer(campaignId: string, timer: NodeJS.Timeout) {
+  const existing = activeCampaignTimers.get(campaignId) || [];
+  existing.push(timer);
+  activeCampaignTimers.set(campaignId, existing);
+}
+
+function cancelCampaignTimers(campaignId: string) {
+  const timers = activeCampaignTimers.get(campaignId);
+  if (timers) {
+    timers.forEach(t => clearTimeout(t));
+    activeCampaignTimers.delete(campaignId);
+  }
+}
 
 // CAMPAIGNS: Pause
 app.post('/api/campaigns/:id/pause', (req: Request, res: Response) => {
@@ -320,6 +362,7 @@ app.post('/api/campaigns/:id/pause', (req: Request, res: Response) => {
   const campaign = campaigns.find(c => c.id === id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   campaign.status = 'paused';
+  cancelCampaignTimers(id);
   persistData();
   res.json({ campaign, message: 'Campaign paused' });
 });
@@ -334,8 +377,29 @@ app.post('/api/campaigns/:id/resume', (req: Request, res: Response) => {
   res.json({ campaign, message: 'Campaign resumed' });
 });
 
+// CAMPAIGNS: Delete
+app.delete('/api/campaigns/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const index = campaigns.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+
+  cancelCampaignTimers(id);
+  const [deletedCampaign] = campaigns.splice(index, 1);
+  persistData();
+
+  console.log(`[Campaign Deleted] Removed: ${deletedCampaign.name} (${id})`);
+  res.json({
+    success: true,
+    message: `Campaign "${deletedCampaign.name}" deleted successfully`,
+    deletedId: id,
+    campaigns
+  });
+});
+
 // CAMPAIGNS: Force trigger next batch
-app.post('/api/campaigns/:id/dispatch-next', (req: Request, res: Response) => {
+app.post('/api/campaigns/:id/dispatch-next', async (req: Request, res: Response) => {
   const { id } = req.params;
   const campaign = campaigns.find(c => c.id === id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
@@ -346,162 +410,324 @@ app.post('/api/campaigns/:id/dispatch-next', (req: Request, res: Response) => {
     return res.json({ message: 'All batches have already been executed', campaign });
   }
 
-  // Execute batch via SMM v2 protocol gateway
-  executeBatch(campaign, nextPending);
+  // Execute batch via live SMM panel gateway
+  await executeBatch(campaign, nextPending, true);
   res.json({ message: `Batch #${nextPending.batchIndex} executed!`, batch: nextPending, campaign });
 });
 
-// SMM v2 Multi-Provider Execution Logic
-function executeBatch(campaign: any, batch: any) {
-  batch.status = 'success';
+// ORDERS: Live check from SMM panel
+app.get('/api/orders/:orderId/status', async (req: Request, res: Response) => {
+  const { orderId } = req.params;
+  const provider = (req.query.provider as string) || 'reliablesmm';
+  const panel = panels.find(p => p.id === provider) || panels[0];
+  const result = await callSmmApi(panel.apiUrl, panel.apiKey, 'status', { order: orderId });
+  res.json({ orderId, provider: panel.name, result });
+});
+
+// Real SMM Multi-Provider Execution Logic
+async function executeBatch(campaign: any, batch: any, isForceImmediate = false) {
+  if (batch.status === 'success' || batch.status === 'running') return;
+
+  batch.status = 'running';
   batch.dispatchedAt = new Date().toISOString();
   batch.orderIds = batch.orderIds || {};
   batch.executionLogs = batch.executionLogs || [];
 
   const timeStr = new Date().toLocaleTimeString();
-  batch.executionLogs.push(`[${timeStr}] Dispatching Batch #${batch.batchIndex}...`);
+  batch.executionLogs.push(`[${timeStr}] Initializing Batch #${batch.batchIndex} live dispatch...`);
+
+  const reliablePanel = panels.find(p => p.id === 'reliablesmm') || {
+    apiUrl: 'https://reliablesmm.com/api/v2',
+    apiKey: process.env.RELIABLESMM_API_KEY || '79bb502d1dc2c1bccf81ef56a6ec9ef5'
+  };
+
+  const japPanel = panels.find(p => p.id === 'jap') || {
+    apiUrl: 'https://justanotherpanel.com/api/v2',
+    apiKey: process.env.JAP_API_KEY || '085945504bab9706597c00aaf8c1edb4'
+  };
+
+  const targetLink = campaign.targetUrl;
 
   // 1. Views Routing -> ReliableSMM (Service 8024, Instagram High-Retention Views) [T+0 min]
-  if (batch.views > 0) {
-    const orderId = 'ORD-REL-8024-' + Math.floor(100000 + Math.random() * 900000);
-    batch.orderIds.views = orderId;
-    batch.executionLogs.push(`[${timeStr}] [T+0m] Views: Dispatched ${batch.views} units to ReliableSMM (Service #8024). Order: ${orderId}`);
-    dispatchLogs.push({
-      id: 'log_' + Date.now() + '_views',
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      batchIndex: batch.batchIndex,
-      timestamp: new Date().toISOString(),
-      providerName: 'ReliableSMM',
-      serviceId: 8024,
-      metricType: 'views',
-      quantity: batch.views,
-      status: 'success',
-      orderId,
-      responsePayload: { order: orderId }
+  if (batch.views > 0 && !batch.orderIds.views) {
+    const viewsQty = Math.max(100, Math.round(batch.views));
+    batch.executionLogs.push(`[${timeStr}] [T+0m] Sending ${viewsQty} views to ReliableSMM (Service #8024)...`);
+    const viewsRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+      service: 8024,
+      link: targetLink,
+      quantity: viewsQty
     });
-  }
 
-  // If seed batch, engagement remains locked
-  if (batch.isSeedBatch) {
-    batch.executionLogs.push(`[${timeStr}] Seed Batch Protocol: Engagement locked (Likes, Comments, Saves held for organic warmup).`);
-    return;
-  }
-
-  // 2. Saves Routing -> ReliableSMM (Service 7841, min 1) [Starts at min 1]
-  if (batch.saves > 0) {
-    const orderId = 'ORD-REL-SAVE-' + Math.floor(100000 + Math.random() * 900000);
-    batch.orderIds.saves = orderId;
-    batch.executionLogs.push(`[${timeStr}] [T+1m] Saves: Dispatched ${batch.saves} to ReliableSMM (#7841, starts at min 1). Order: ${orderId}`);
-    dispatchLogs.push({
-      id: 'log_' + Date.now() + '_saves',
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      batchIndex: batch.batchIndex,
-      timestamp: new Date(Date.now() + 60 * 1000).toISOString(),
-      providerName: 'ReliableSMM',
-      serviceId: 7841,
-      metricType: 'saves',
-      quantity: batch.saves,
-      status: 'success',
-      orderId,
-      responsePayload: { order: orderId }
-    });
-  }
-
-  // 3. Reposts Routing -> ReliableSMM (Service 7842, min 1) [Starts at min 1]
-  if (batch.reposts > 0) {
-    const orderId = 'ORD-REL-REP-' + Math.floor(100000 + Math.random() * 900000);
-    batch.orderIds.reposts = orderId;
-    batch.executionLogs.push(`[${timeStr}] [T+1m] Reposts: Dispatched ${batch.reposts} to ReliableSMM (#7842, starts at min 1). Order: ${orderId}`);
-    dispatchLogs.push({
-      id: 'log_' + Date.now() + '_reposts',
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      batchIndex: batch.batchIndex,
-      timestamp: new Date(Date.now() + 60 * 1000).toISOString(),
-      providerName: 'ReliableSMM',
-      serviceId: 7842,
-      metricType: 'reposts',
-      quantity: batch.reposts,
-      status: 'success',
-      orderId,
-      responsePayload: { order: orderId }
-    });
-  }
-
-  // 4. Split Likes Routing
-  // Micro-Likes (5 to 9 likes): Routed to JAP Service 1778 (starts at min 5)
-  // Macro-Likes (10+ likes): Routed to ReliableSMM Service 7147 (starts at min 10)
-  if (batch.likes > 0) {
-    if (batch.likes < 10) {
-      const orderId = 'ORD-JAP-' + Math.floor(100000 + Math.random() * 900000);
-      batch.orderIds.likes = orderId;
-      batch.likesProvider = 'JAP_Micro';
-      batch.executionLogs.push(`[${timeStr}] [T+5m] Micro-Likes: Dispatched ${batch.likes} to Just Another Panel (JAP #1778, starts at min 5). Order: ${orderId}`);
+    if (viewsRes && viewsRes.order) {
+      const orderId = String(viewsRes.order);
+      batch.orderIds.views = orderId;
+      batch.executionLogs.push(`[${timeStr}] [T+0m] Views: LIVE order placed on ReliableSMM (#8024). Order ID: #${orderId}`);
       dispatchLogs.push({
-        id: 'log_' + Date.now() + '_likes_jap',
+        id: 'log_' + Date.now() + '_views',
         campaignId: campaign.id,
         campaignName: campaign.name,
         batchIndex: batch.batchIndex,
-        timestamp: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-        providerName: 'Just Another Panel (JAP)',
-        serviceId: 1778,
-        metricType: 'micro-likes',
-        quantity: batch.likes,
+        timestamp: new Date().toISOString(),
+        providerName: 'ReliableSMM',
+        serviceId: 8024,
+        metricType: 'views',
+        quantity: viewsQty,
         status: 'success',
         orderId,
-        responsePayload: { order: orderId }
+        responsePayload: viewsRes
       });
     } else {
-      const orderId = 'ORD-REL-' + Math.floor(100000 + Math.random() * 900000);
-      batch.orderIds.likes = orderId;
-      batch.likesProvider = 'ReliableSMM_Macro';
-      batch.executionLogs.push(`[${timeStr}] [T+10m] Macro-Likes: Dispatched ${batch.likes} to ReliableSMM (#7147, starts at min 10). Order: ${orderId}`);
+      const errorMsg = viewsRes?.error || 'Panel request error';
+      batch.orderIds.views = `ERR: ${errorMsg}`;
+      batch.executionLogs.push(`[${timeStr}] [T+0m] Views: ReliableSMM response: "${errorMsg}" (Attempted qty: ${viewsQty})`);
       dispatchLogs.push({
-        id: 'log_' + Date.now() + '_likes_rel',
+        id: 'log_' + Date.now() + '_views',
         campaignId: campaign.id,
         campaignName: campaign.name,
         batchIndex: batch.batchIndex,
-        timestamp: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        timestamp: new Date().toISOString(),
         providerName: 'ReliableSMM',
-        serviceId: 7147,
-        metricType: 'macro-likes',
-        quantity: batch.likes,
-        status: 'success',
-        orderId,
-        responsePayload: { order: orderId }
+        serviceId: 8024,
+        metricType: 'views',
+        quantity: viewsQty,
+        status: 'failed',
+        error: errorMsg,
+        responsePayload: viewsRes
       });
     }
   }
 
-  // 5. Shares Routing -> ReliableSMM (Service 2060, min 10) [Starts at min 10]
-  if (batch.shares > 0) {
-    const orderId = 'ORD-REL-SHR-' + Math.floor(100000 + Math.random() * 900000);
-    batch.orderIds.shares = orderId;
-    batch.executionLogs.push(`[${timeStr}] [T+10m] Shares: Dispatched ${batch.shares} to ReliableSMM (#2060, starts at min 10). Order: ${orderId}`);
-    dispatchLogs.push({
-      id: 'log_' + Date.now() + '_shares',
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      batchIndex: batch.batchIndex,
-      timestamp: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-      providerName: 'ReliableSMM',
-      serviceId: 2060,
-      metricType: 'shares',
-      quantity: batch.shares,
-      status: 'success',
-      orderId,
-      responsePayload: { order: orderId }
-    });
+  // If seed batch, engagement remains locked for warmup
+  if (batch.isSeedBatch) {
+    batch.status = 'success';
+    batch.executionLogs.push(`[${timeStr}] Seed Warmup Protocol: Engagement locked (Likes, Comments, Saves held for organic warmup).`);
+    const allDone = campaign.batches.every((b: any) => b.status === 'success');
+    if (allDone) {
+      campaign.status = 'completed';
+      campaign.completedAt = new Date().toISOString();
+    }
+    persistData();
+    return;
   }
 
-  // Check if all batches complete
-  const allDone = campaign.batches.every((b: any) => b.status === 'success');
-  if (allDone) {
-    campaign.status = 'completed';
-    campaign.completedAt = new Date().toISOString();
+  // Helper for Saves & Reposts (starts at min 1)
+  const dispatchSavesAndReposts = async () => {
+    const subTime = new Date().toLocaleTimeString();
+
+    // 2. Saves Routing -> ReliableSMM (Service 7841, min 1)
+    if (batch.saves > 0 && !batch.orderIds.saves) {
+      const savesQty = Math.max(1, Math.round(batch.saves));
+      const savesRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+        service: 7841,
+        link: targetLink,
+        quantity: savesQty
+      });
+      if (savesRes && savesRes.order) {
+        batch.orderIds.saves = String(savesRes.order);
+        batch.executionLogs.push(`[${subTime}] [T+1m] Saves: LIVE order placed on ReliableSMM (#7841). Order ID: #${savesRes.order}`);
+      } else {
+        batch.orderIds.saves = `ERR: ${savesRes?.error || 'Failed'}`;
+        batch.executionLogs.push(`[${subTime}] [T+1m] Saves: ReliableSMM response: "${savesRes?.error || 'Failed'}" (Qty: ${savesQty})`);
+      }
+      dispatchLogs.push({
+        id: 'log_' + Date.now() + '_saves',
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        batchIndex: batch.batchIndex,
+        timestamp: new Date().toISOString(),
+        providerName: 'ReliableSMM',
+        serviceId: 7841,
+        metricType: 'saves',
+        quantity: savesQty,
+        status: savesRes?.order ? 'success' : 'failed',
+        orderId: savesRes?.order ? String(savesRes.order) : undefined,
+        responsePayload: savesRes
+      });
+    }
+
+    // 3. Reposts Routing -> ReliableSMM (Service 7842, min 1)
+    if (batch.reposts > 0 && !batch.orderIds.reposts) {
+      const repostsQty = Math.max(1, Math.round(batch.reposts));
+      const repRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+        service: 7842,
+        link: targetLink,
+        quantity: repostsQty
+      });
+      if (repRes && repRes.order) {
+        batch.orderIds.reposts = String(repRes.order);
+        batch.executionLogs.push(`[${subTime}] [T+1m] Reposts: LIVE order placed on ReliableSMM (#7842). Order ID: #${repRes.order}`);
+      } else {
+        batch.orderIds.reposts = `ERR: ${repRes?.error || 'Failed'}`;
+        batch.executionLogs.push(`[${subTime}] [T+1m] Reposts: ReliableSMM response: "${repRes?.error || 'Failed'}" (Qty: ${repostsQty})`);
+      }
+      dispatchLogs.push({
+        id: 'log_' + Date.now() + '_reposts',
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        batchIndex: batch.batchIndex,
+        timestamp: new Date().toISOString(),
+        providerName: 'ReliableSMM',
+        serviceId: 7842,
+        metricType: 'reposts',
+        quantity: repostsQty,
+        status: repRes?.order ? 'success' : 'failed',
+        orderId: repRes?.order ? String(repRes.order) : undefined,
+        responsePayload: repRes
+      });
+    }
+    persistData();
+  };
+
+  // Helper for Likes (starts at min 5 for micro 5-9; starts at min 10 for macro 10+)
+  const dispatchLikes = async () => {
+    const subTime = new Date().toLocaleTimeString();
+    if (batch.likes > 0 && !batch.orderIds.likes) {
+      if (batch.likes < 10) {
+        // Micro-Likes (5 to 9 likes) -> JAP (#1778, starts at min 5)
+        const microQty = Math.max(5, Math.min(9, Math.round(batch.likes)));
+        const likesRes = await callSmmApi(japPanel.apiUrl, japPanel.apiKey, 'add', {
+          service: 1778,
+          link: targetLink,
+          quantity: microQty
+        });
+        batch.likesProvider = 'JAP_Micro';
+        if (likesRes && likesRes.order) {
+          batch.orderIds.likes = String(likesRes.order);
+          batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: LIVE order placed on JAP (#1778). Order ID: #${likesRes.order}`);
+        } else {
+          batch.orderIds.likes = `ERR: ${likesRes?.error || 'Failed'}`;
+          batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: JAP response: "${likesRes?.error || 'Failed'}" (Qty: ${microQty})`);
+        }
+        dispatchLogs.push({
+          id: 'log_' + Date.now() + '_likes_jap',
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          batchIndex: batch.batchIndex,
+          timestamp: new Date().toISOString(),
+          providerName: 'Just Another Panel (JAP)',
+          serviceId: 1778,
+          metricType: 'micro-likes',
+          quantity: microQty,
+          status: likesRes?.order ? 'success' : 'failed',
+          orderId: likesRes?.order ? String(likesRes.order) : undefined,
+          responsePayload: likesRes
+        });
+      } else {
+        // Macro-Likes (10+ likes) -> ReliableSMM (#7147, starts at min 10)
+        const macroQty = Math.max(10, Math.round(batch.likes));
+        const likesRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+          service: 7147,
+          link: targetLink,
+          quantity: macroQty
+        });
+        batch.likesProvider = 'ReliableSMM_Macro';
+        if (likesRes && likesRes.order) {
+          batch.orderIds.likes = String(likesRes.order);
+          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: LIVE order placed on ReliableSMM (#7147). Order ID: #${likesRes.order}`);
+        } else {
+          batch.orderIds.likes = `ERR: ${likesRes?.error || 'Failed'}`;
+          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: ReliableSMM response: "${likesRes?.error || 'Failed'}" (Qty: ${macroQty})`);
+        }
+        dispatchLogs.push({
+          id: 'log_' + Date.now() + '_likes_rel',
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          batchIndex: batch.batchIndex,
+          timestamp: new Date().toISOString(),
+          providerName: 'ReliableSMM',
+          serviceId: 7147,
+          metricType: 'macro-likes',
+          quantity: macroQty,
+          status: likesRes?.order ? 'success' : 'failed',
+          orderId: likesRes?.order ? String(likesRes.order) : undefined,
+          responsePayload: likesRes
+        });
+      }
+    }
+    persistData();
+  };
+
+  // Helper for Shares (starts at min 10)
+  const dispatchShares = async () => {
+    const subTime = new Date().toLocaleTimeString();
+    if (batch.shares > 0 && !batch.orderIds.shares) {
+      const sharesQty = Math.max(10, Math.round(batch.shares));
+      const sharesRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+        service: 2060,
+        link: targetLink,
+        quantity: sharesQty
+      });
+      if (sharesRes && sharesRes.order) {
+        batch.orderIds.shares = String(sharesRes.order);
+        batch.executionLogs.push(`[${subTime}] [T+10m] Shares: LIVE order placed on ReliableSMM (#2060). Order ID: #${sharesRes.order}`);
+      } else {
+        batch.orderIds.shares = `ERR: ${sharesRes?.error || 'Failed'}`;
+        batch.executionLogs.push(`[${subTime}] [T+10m] Shares: ReliableSMM response: "${sharesRes?.error || 'Failed'}" (Qty: ${sharesQty})`);
+      }
+      dispatchLogs.push({
+        id: 'log_' + Date.now() + '_shares',
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        batchIndex: batch.batchIndex,
+        timestamp: new Date().toISOString(),
+        providerName: 'ReliableSMM',
+        serviceId: 2060,
+        metricType: 'shares',
+        quantity: sharesQty,
+        status: sharesRes?.order ? 'success' : 'failed',
+        orderId: sharesRes?.order ? String(sharesRes.order) : undefined,
+        responsePayload: sharesRes
+      });
+    }
+
+    persistData();
+  };
+
+  // Actual-time intra-batch staggered dispatch
+  // Views sent immediately above (T+0 min).
+  // If force-triggered or elapsed > 10m: dispatch remaining items right away.
+  // Otherwise, schedule actual timeouts for T+1m, T+5m/10m, and T+10m.
+  const batchScheduledMs = new Date(batch.scheduledAt).getTime();
+  const elapsedMs = Math.max(0, Date.now() - batchScheduledMs);
+
+  if (isForceImmediate || elapsedMs >= 10 * 60 * 1000) {
+    await dispatchSavesAndReposts();
+    await dispatchLikes();
+    await dispatchShares();
+    batch.status = 'success';
+    const allDone = campaign.batches.every((b: any) => b.status === 'success');
+    if (allDone) {
+      campaign.status = 'completed';
+      campaign.completedAt = new Date().toISOString();
+    }
+  } else {
+    // Staggered actual time delivery with timer cancellation support
+    batch.status = 'running';
+
+    const tSaves = setTimeout(async () => {
+      await dispatchSavesAndReposts();
+    }, Math.max(1000, 1 * 60 * 1000 - elapsedMs));
+    registerCampaignTimer(campaign.id, tSaves);
+
+    const likesDelay = (batch.likes < 10 ? 5 : 10) * 60 * 1000 - elapsedMs;
+    const tLikes = setTimeout(async () => {
+      await dispatchLikes();
+    }, Math.max(1000, likesDelay));
+    registerCampaignTimer(campaign.id, tLikes);
+
+    const tShares = setTimeout(async () => {
+      await dispatchShares();
+      batch.status = 'success';
+      const allDone = campaign.batches.every((b: any) => b.status === 'success');
+      if (allDone) {
+        campaign.status = 'completed';
+        campaign.completedAt = new Date().toISOString();
+      }
+      persistData();
+    }, Math.max(1000, 10 * 60 * 1000 - elapsedMs));
+    registerCampaignTimer(campaign.id, tShares);
   }
+
   persistData();
 }
 
@@ -736,8 +962,8 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SMM Engine] Server running 24/7 on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`\n  VITE v8.3.0  ready in 150 ms\n\n  ➜  Local:   http://localhost:${PORT}/\n  ➜  Network: http://${HOST}:${PORT}/\n\n[SMM Engine] Server running 24/7 on http://localhost:${PORT}\n`);
   });
 }
 

@@ -54,13 +54,6 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
     }
   }, [targetUrl, platform, setHandle]);
 
-  const loadSampleUrl = (sample: string, defaultName: string) => {
-    setTargetUrl(sample);
-    if (!campaignName || campaignName.startsWith('Campaign #')) {
-      setCampaignName(defaultName);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* Campaign Name & Overview */}
@@ -177,28 +170,6 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
               Auto Validation
             </span>
           </label>
-
-          {/* Quick preset links */}
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-500 dark:text-slate-400">Quick Test Samples:</span>
-            {platform === 'instagram' ? (
-              <button
-                type="button"
-                onClick={() => loadSampleUrl('https://www.instagram.com/reel/C8qXYZ99abc/', 'IG Reel Viral Drip #44')}
-                className="text-pink-600 dark:text-pink-400 hover:underline font-mono text-[11px] cursor-pointer"
-              >
-                Sample Reel URL
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => loadSampleUrl('https://www.tiktok.com/@growthmentor/video/73829104857102948', 'TikTok FYP Push #12')}
-                className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono text-[11px] cursor-pointer"
-              >
-                Sample TikTok URL
-              </button>
-            )}
-          </div>
         </div>
 
         <div className="relative">
@@ -208,8 +179,8 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
             onChange={(e) => setTargetUrl(e.target.value)}
             placeholder={
               platform === 'instagram'
-                ? 'https://www.instagram.com/reel/C8qXYZ99abc/ or https://instagram.com/p/...'
-                : 'https://www.tiktok.com/@username/video/7123456789012345678'
+                ? 'https://www.instagram.com/reel/XXXXXXXXXXX/ or https://instagram.com/p/...'
+                : 'https://www.tiktok.com/@username/video/1234567890123456789'
             }
             className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-xl pl-4 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none transition-all ${
               targetUrl

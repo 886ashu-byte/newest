@@ -1,0 +1,49 @@
+{
+  "campaigns": [],
+  "panels": [
+    {
+      "id": "reliablesmm",
+      "name": "ReliableSMM Enterprise",
+      "apiUrl": "https://reliablesmm.com/api/v2",
+      "apiKey": "79bb502d1dc2c1bccf81ef56a6ec9ef5",
+      "currency": "USD",
+      "balance": 412.15,
+      "status": "active",
+      "isDefault": true,
+      "lastChecked": "2026-10-20T15:08:46.048Z",
+      "supportedServicesCount": 3100,
+      "notes": "Primary provider for Views (Service 8024), Macro-Likes (7147), Saves (7841), Reposts (7842), Shares (2060)"
+    },
+    {
+      "id": "jap",
+      "name": "Just Another Panel (JAP)",
+      "apiUrl": "https://justanotherpanel.com/api/v2",
+      "apiKey": "085945504bab9706597c00aaf8c1edb4",
+      "currency": "USD",
+      "balance": 247.8,
+      "status": "active",
+      "isDefault": true,
+      "lastChecked": "2026-10-20T15:08:46.048Z",
+      "supportedServicesCount": 2890,
+      "notes": "Micro-Likes specialist (Service 1778, 5-9 likes micro-drip) & Custom Engagement"
+    }
+  ],
+  "dispatchLogs": [
+    {
+      "id": "log_1792508934493_views",
+      "campaignId": "camp_mvgtjcqg",
+      "campaignName": "Test Campaign",
+      "batchIndex": 0,
+      "timestamp": "2026-10-20T15:08:54.493Z",
+      "providerName": "ReliableSMM",
+      "serviceId": 8024,
+      "metricType": "views",
+      "quantity": 120,
+      "status": "success",
+      "orderId": "8531105",
+      "responsePayload": {
+        "order": 8531105
+      }
+    }
+  ]
+}

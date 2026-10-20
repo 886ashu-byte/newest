@@ -27,6 +27,10 @@ export interface CurvePoint {
 }
 
 export type SpeedInterval = 
+  | 'interval_20_35m'
+  | 'interval_25_40m'
+  | 'interval_35_50m'
+  | 'interval_45_60m'
   | 'interval_25m'
   | 'interval_35m'
   | 'interval_45m'
@@ -136,11 +140,13 @@ export interface ScheduledBatch {
   saves: number;
   reposts: number;
   likesProvider: 'JAP_Micro' | 'ReliableSMM_Macro' | 'None';
-  status: 'pending' | 'dispatched' | 'success' | 'failed' | 'skipped';
+  status: 'pending' | 'running' | 'dispatched' | 'success' | 'failed' | 'skipped';
   dispatchedAt?: string;
   orderIds?: Record<string, string>;
   error?: string;
   executionLogs?: string[];
+  gapMinutes?: number;
+  gapText?: string;
 }
 
 export interface AlgorithmicRiskAudit {
@@ -180,6 +186,7 @@ export interface Campaign {
   curvePoints?: CurvePoint[];
   bezierPoints: BezierControlPoints;
   speedInterval: SpeedInterval;
+  cadenceRange?: { minMins: number; maxMins: number };
   intervalMinutes: number;
   jitterPercent: number; // e.g. 15 for ±15%
   seedChunkProtocol: boolean;

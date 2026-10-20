@@ -401,8 +401,8 @@ export const Step4JitterAndRisk: React.FC<Step4Props> = ({
                       isSeed 
                         ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30' 
                         : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30'
-                    }`}>
-                      +{timeLabel}
+                    }`} title={chunk.scheduledAt ? new Date(chunk.scheduledAt).toLocaleTimeString() : undefined}>
+                      {chunk.gapText || `+${timeLabel}`}
                     </span>
                   </div>
 

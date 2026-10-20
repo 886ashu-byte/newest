@@ -80,7 +80,7 @@ export default function App() {
       id: 'camp_live_demo1',
       name: 'Viral Reels Algorithmic Push #01',
       platform: 'instagram',
-      targetUrl: 'https://www.instagram.com/reel/C8qXYZ99abc/',
+      targetUrl: 'https://www.instagram.com/reel/viral_post_demo/',
       handle: '@aesthetic.vibes',
       organicMode: true,
       metrics: demoMetrics,
@@ -89,8 +89,8 @@ export default function App() {
       durationHours: 24,
       curve: 'trending_rocket',
       bezierPoints: { p0: { x: 0, y: 0 }, p1: { x: 0.25, y: 0.75 }, p2: { x: 0.75, y: 0.35 }, p3: { x: 1, y: 1 } },
-      speedInterval: 'turbo_2m',
-      intervalMinutes: 2,
+      speedInterval: 'interval_20_35m',
+      intervalMinutes: 28,
       jitterPercent: 18,
       seedChunkProtocol: true,
       batches: demoBatches,
@@ -120,7 +120,7 @@ export default function App() {
         const res = await fetch('/api/campaigns');
         if (res.ok) {
           const data = await res.json();
-          if (data.campaigns && Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+          if (data.campaigns && Array.isArray(data.campaigns)) {
             setCampaigns(data.campaigns);
           }
         }
@@ -130,45 +130,21 @@ export default function App() {
     loadServerData();
   }, []);
 
-  // 24/7 background ticker for live in-browser countdown & execution
+  // 24/7 background sync: Pull real server state (live SMM panel order IDs, delivery status, real logs)
   useEffect(() => {
-    const workerInterval = setInterval(() => {
-      const now = Date.now();
-
-      setCampaigns(prevCampaigns => 
-        prevCampaigns.map(camp => {
-          if (camp.status !== 'running') return camp;
-
-          let updated = false;
-          const updatedBatches = camp.batches.map(batch => {
-            if (batch.status === 'pending') {
-              const scheduledMs = new Date(batch.scheduledAt).getTime();
-              if (scheduledMs <= now) {
-                updated = true;
-                const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
-                return {
-                  ...batch,
-                  status: 'success' as const,
-                  dispatchedAt: new Date().toISOString(),
-                  orderIds: {
-                    views: orderId,
-                    ...(batch.likes > 0 ? { likes: 'ORD-LK-' + Math.floor(100000 + Math.random() * 900000) } : {})
-                  }
-                };
-              }
-            }
-            return batch;
-          });
-
-          if (updated) {
-            return { ...camp, batches: updatedBatches };
+    const syncWorker = setInterval(async () => {
+      try {
+        const res = await fetch('/api/campaigns');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.campaigns && Array.isArray(data.campaigns)) {
+            setCampaigns(data.campaigns);
           }
-          return camp;
-        })
-      );
+        }
+      } catch (e) {}
     }, 5000);
 
-    return () => clearInterval(workerInterval);
+    return () => clearInterval(syncWorker);
   }, []);
 
   // Save campaigns to localStorage whenever updated
@@ -185,36 +161,32 @@ export default function App() {
     setActiveTab('campaigns');
   };
 
-  // Manual fast-forward next batch
+  // Manual fast-forward next batch: Triggers live dispatch on main SMM panel
   const handleFastForwardBatch = async (campaignId: string) => {
     try {
-      await fetch(`/api/campaigns/${campaignId}/dispatch-next`, { method: 'POST' });
-    } catch (e) {}
-
-    setCampaigns(prev => prev.map(camp => {
-      if (camp.id === campaignId) {
-        const nextPendingIndex = camp.batches.findIndex(b => b.status === 'pending');
-        if (nextPendingIndex === -1) return camp;
-
-        const updatedBatches = [...camp.batches];
-        const batch = { ...updatedBatches[nextPendingIndex] };
-        batch.status = 'success';
-        batch.dispatchedAt = new Date().toISOString();
-        batch.orderIds = {
-          views: 'ORD-FF-' + Math.floor(100000 + Math.random() * 900000),
-          ...(batch.likes > 0 ? { likes: 'ORD-LK-' + Math.floor(100000 + Math.random() * 900000) } : {})
-        };
-        updatedBatches[nextPendingIndex] = batch;
-
-        return { ...camp, batches: updatedBatches };
+      const res = await fetch(`/api/campaigns/${campaignId}/dispatch-next`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === campaignId ? data.campaign : c));
+          return;
+        }
       }
-      return camp;
-    }));
+    } catch (e) {
+      console.warn('Dispatch next batch error:', e);
+    }
   };
 
   const handlePauseCampaign = async (campaignId: string) => {
     try {
-      await fetch(`/api/campaigns/${campaignId}/pause`, { method: 'POST' });
+      const res = await fetch(`/api/campaigns/${campaignId}/pause`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === campaignId ? data.campaign : c));
+          return;
+        }
+      }
     } catch (e) {}
 
     setCampaigns(prev => prev.map(c => c.id === campaignId ? { ...c, status: 'paused' } : c));
@@ -222,10 +194,44 @@ export default function App() {
 
   const handleResumeCampaign = async (campaignId: string) => {
     try {
-      await fetch(`/api/campaigns/${campaignId}/resume`, { method: 'POST' });
+      const res = await fetch(`/api/campaigns/${campaignId}/resume`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === campaignId ? data.campaign : c));
+          return;
+        }
+      }
     } catch (e) {}
 
     setCampaigns(prev => prev.map(c => c.id === campaignId ? { ...c, status: 'running' } : c));
+  };
+
+  // Delete campaign: Permanently remove from server and cancel remaining batches
+  const handleDeleteCampaign = async (campaignId: string) => {
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}`, { method: 'DELETE' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns && Array.isArray(data.campaigns)) {
+          setCampaigns(data.campaigns);
+          try {
+            localStorage.setItem('smm_campaigns_cache', JSON.stringify(data.campaigns));
+          } catch (e) {}
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Delete campaign error:', e);
+    }
+
+    setCampaigns(prev => {
+      const updated = prev.filter(c => c.id !== campaignId);
+      try {
+        localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
   };
 
   const activeCount = campaigns.filter(c => c.status === 'running').length;
@@ -254,6 +260,7 @@ export default function App() {
             onFastForwardBatch={handleFastForwardBatch}
             onPauseCampaign={handlePauseCampaign}
             onResumeCampaign={handleResumeCampaign}
+            onDeleteCampaign={handleDeleteCampaign}
           />
         )}
       </main>

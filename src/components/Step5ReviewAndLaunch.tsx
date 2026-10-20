@@ -172,7 +172,7 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
               Service: <span className="text-cyan-300 font-bold">#8024</span> (Instagram High-Retention Views)
             </div>
             <div className="text-[10px] text-slate-400">
-              Min Qty: 10 • 25–60 min gap between batches
+              Min Qty: 100 • Dynamic randomized gap per batch
             </div>
           </div>
 

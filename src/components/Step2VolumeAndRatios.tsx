@@ -56,6 +56,8 @@ interface Step2Props {
   setAudienceRegion?: (r: AudienceRegion) => void;
   speedInterval?: SpeedInterval;
   setSpeedInterval?: (s: SpeedInterval) => void;
+  cadenceRange?: { minMins: number; maxMins: number };
+  setCadenceRange?: (r: { minMins: number; maxMins: number }) => void;
   curvePoints?: CurvePoint[];
   setCurvePoints?: React.Dispatch<React.SetStateAction<CurvePoint[]>>;
 }
@@ -133,8 +135,10 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
   setCurve,
   audienceRegion = 'india',
   setAudienceRegion,
-  speedInterval = 'turbo_2m',
+  speedInterval = 'interval_20_35m',
   setSpeedInterval,
+  cadenceRange = { minMins: 20, maxMins: 35 },
+  setCadenceRange,
   curvePoints,
   setCurvePoints,
 }) => {
@@ -381,28 +385,88 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
           </div>
 
           {setSpeedInterval && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-600 dark:text-slate-400 font-mono">Cadence (25–60m gap):</span>
-              <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-0.5 text-xs font-mono transition-colors">
-                {[
-                  { id: 'interval_25m', label: '25m' },
-                  { id: 'interval_35m', label: '35m' },
-                  { id: 'interval_45m', label: '45m' },
-                  { id: 'interval_60m', label: '60m' },
-                ].map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setSpeedInterval(s.id as SpeedInterval)}
-                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                      speedInterval === s.id
-                        ? 'bg-purple-600 text-white font-bold shadow-sm'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
+            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs text-slate-700 dark:text-slate-300 font-mono font-semibold flex items-center gap-1.5">
+                  <span>Batch Cadence Gap:</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                    Randomized Per Batch
+                  </span>
+                </span>
+                
+                <div className="flex items-center flex-wrap gap-1.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1 text-xs font-mono transition-colors">
+                  {[
+                    { id: 'interval_20_35m', label: '20–35m', min: 20, max: 35 },
+                    { id: 'interval_25_40m', label: '25–40m', min: 25, max: 40 },
+                    { id: 'interval_35_50m', label: '35–50m', min: 35, max: 50 },
+                    { id: 'interval_45_60m', label: '45–60m', min: 45, max: 60 },
+                  ].map((s) => {
+                    const isSelected = speedInterval === s.id || (cadenceRange?.minMins === s.min && cadenceRange?.maxMins === s.max);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => {
+                          setSpeedInterval(s.id as SpeedInterval);
+                          if (setCadenceRange) {
+                            setCadenceRange({ minMins: s.min, maxMins: s.max });
+                          }
+                        }}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-600 text-white font-bold shadow-sm'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Dynamic Variance Explanation Note */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/60 dark:border-purple-800/40 p-2.5 rounded-xl text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-purple-600 dark:text-purple-400 font-bold">Entropy Guard:</span>
+                  <span>
+                    Each batch receives a unique random time gap between{' '}
+                    <strong className="text-purple-600 dark:text-purple-300 font-bold">{cadenceRange?.minMins || 20}m</strong> and{' '}
+                    <strong className="text-purple-600 dark:text-purple-300 font-bold">{cadenceRange?.maxMins || 35}m</strong>.
+                  </span>
+                </div>
+
+                {setCadenceRange && (
+                  <div className="flex items-center gap-1.5 shrink-0 text-[10px]">
+                    <span className="text-slate-400">Custom:</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={120}
+                      value={cadenceRange?.minMins || 20}
+                      onChange={(e) => {
+                        const val = Math.max(10, Number(e.target.value));
+                        setCadenceRange({ minMins: val, maxMins: Math.max(val, cadenceRange?.maxMins || 35) });
+                      }}
+                      className="w-12 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded px-1 py-0.5 text-center font-bold text-slate-900 dark:text-white"
+                      title="Min Minutes"
+                    />
+                    <span>to</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={180}
+                      value={cadenceRange?.maxMins || 35}
+                      onChange={(e) => {
+                        const val = Math.max(cadenceRange?.minMins || 20, Number(e.target.value));
+                        setCadenceRange({ minMins: cadenceRange?.minMins || 20, maxMins: val });
+                      }}
+                      className="w-12 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded px-1 py-0.5 text-center font-bold text-slate-900 dark:text-white"
+                      title="Max Minutes"
+                    />
+                    <span>m</span>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -560,19 +560,60 @@ export function getCurveDensityWeights(
 }
 
 /**
- * Speed interval to minutes
+ * Speed interval to average minutes
  */
 export function getIntervalMinutes(interval: SpeedInterval): number {
   switch (interval) {
+    case 'interval_20_35m': return 28; // mid-point of 20-35
+    case 'interval_25_40m': return 32; // mid-point of 25-40
+    case 'interval_35_50m': return 42; // mid-point of 35-50
+    case 'interval_45_60m': return 52; // mid-point of 45-60
     case 'interval_25m': return 25;
     case 'interval_35m': return 35;
     case 'interval_45m': return 45;
     case 'interval_60m': return 60;
-    case 'rapid_30s': return 25; // mapped to organic 25m minimum gap
-    case 'turbo_1m': return 30;
-    case 'turbo_2m': return 35;
+    case 'rapid_30s': return 25;
+    case 'turbo_1m': return 28;
+    case 'turbo_2m': return 32;
     case 'hourly_60m': return 60;
-    default: return 35;
+    default: return 28;
+  }
+}
+
+/**
+ * Returns min & max minutes for dynamic batch gaps
+ */
+export function getCadenceRange(
+  interval?: SpeedInterval | string,
+  customRange?: { minMins: number; maxMins: number }
+): { minMins: number; maxMins: number; label: string } {
+  if (customRange && customRange.minMins > 0 && customRange.maxMins >= customRange.minMins) {
+    return {
+      minMins: customRange.minMins,
+      maxMins: customRange.maxMins,
+      label: `${customRange.minMins}–${customRange.maxMins}m`
+    };
+  }
+
+  switch (interval) {
+    case 'interval_20_35m':
+      return { minMins: 20, maxMins: 35, label: '20–35m (High Variance)' };
+    case 'interval_25_40m':
+      return { minMins: 25, maxMins: 40, label: '25–40m (Balanced)' };
+    case 'interval_35_50m':
+      return { minMins: 35, maxMins: 50, label: '35–50m (Steady)' };
+    case 'interval_45_60m':
+      return { minMins: 45, maxMins: 60, label: '45–60m (Stealth)' };
+    case 'interval_25m':
+      return { minMins: 20, maxMins: 30, label: '20–30m' };
+    case 'interval_35m':
+      return { minMins: 20, maxMins: 35, label: '20–35m' };
+    case 'interval_45m':
+      return { minMins: 35, maxMins: 50, label: '35–50m' };
+    case 'interval_60m':
+      return { minMins: 45, maxMins: 60, label: '45–60m' };
+    default:
+      return { minMins: 20, maxMins: 35, label: '20–35m' };
   }
 }
 
@@ -811,6 +852,8 @@ export function generateCampaignBatches(params: {
   routingConfig?: ProviderRoutingConfig;
   curvePoints?: CurvePoint[];
   region?: AudienceRegion;
+  cadenceRange?: { minMins: number; maxMins: number };
+  speedInterval?: SpeedInterval;
 }): ScheduledBatch[] {
   const {
     metrics,
@@ -824,22 +867,28 @@ export function generateCampaignBatches(params: {
     routingConfig = DEFAULT_ROUTING_CONFIG,
     curvePoints,
     region = 'india',
+    cadenceRange,
+    speedInterval,
   } = params;
 
-  // Pacing interval: strictly enforced between 25 and 60 minutes gap
-  const baseInterval = Math.max(25, Math.min(60, intervalMinutes || 35));
+  // Resolve dynamic cadence range (e.g. 20-35m, 25-40m, 35-50m, 45-60m)
+  const range = cadenceRange || getCadenceRange(speedInterval || (intervalMinutes ? `interval_${intervalMinutes}m` : undefined));
+  const minGap = Math.max(10, range.minMins);
+  const maxGap = Math.max(minGap, range.maxMins);
+  const avgGap = (minGap + maxGap) / 2;
+
   const totalMinutes = durationHours * 60;
-  const totalBatches = Math.max(2, Math.round(totalMinutes / baseInterval));
+  const totalBatches = Math.max(2, Math.round(totalMinutes / avgGap));
   const normalizedWeights = getCurveDensityWeights(curve, totalBatches, bezierPoints, durationHours, curvePoints, region);
 
   // 1. Distribute VIEWS across all batches with curve shaping & jitter
-  // ReliableSMM Service #8024 min order requirement is 10 views
+  // ReliableSMM Service #8024 min order requirement is 100 views
   const viewsPerBatch = distributeMetricWithCurveAndJitter(
     metrics.views,
     normalizedWeights,
     jitterPercent,
     11,
-    { minNonZeroParcel: 10, clusterIfSparse: true }
+    { minNonZeroParcel: 100, clusterIfSparse: true }
   );
 
   // 2. Engagement indices (Batch #0 and #1 are Seed warmup if seedChunkProtocol enabled)
@@ -865,13 +914,13 @@ export function generateCampaignBatches(params: {
     { minNonZeroParcel: 1, clusterIfSparse: true }
   );
 
-  // Shares: distributed in parcels of 2-5
+  // Shares: distributed in parcels of 10+ (ReliableSMM #2060 requires min 10)
   const sharesPerBatch = distributeMetricWithCurveAndJitter(
     metrics.shares,
     engWeights,
     jitterPercent,
     303,
-    { minNonZeroParcel: 2, clusterIfSparse: true }
+    { minNonZeroParcel: 10, clusterIfSparse: true }
   );
 
   // Saves: distributed in parcels of 2-6
@@ -898,13 +947,21 @@ export function generateCampaignBatches(params: {
   for (let i = 0; i < totalBatches; i++) {
     const isSeed = seedChunkProtocol && (i === 0 || i === 1);
 
+    let batchGapMins = 0;
+    let batchGapText = 'T+0 (Launch)';
+
     if (i > 0) {
-      // Dynamic organic gap strictly between 25 and 60 minutes
-      const noise = (Math.sin(i * 9973 + 17) + Math.cos(i * 4099 + 13)) / 2;
-      const jitterMins = noise * ((jitterPercent || 15) / 100) * 12;
-      const gapMins = Math.max(25, Math.min(60, Math.round(baseInterval + jitterMins)));
-      const timeJitterSec = jitterPercent > 0 ? Math.round(Math.sin(i * 1337 + 7) * 35) : 0;
-      accumulatedTimeMs += (gapMins * 60 + timeJitterSec) * 1000;
+      // Dynamic random gap strictly within the selected [minGap, maxGap] range for each batch
+      const seedNoise = (Math.sin(i * 8191 + 37) + Math.cos(i * 4253 + 19) + 2) / 4;
+      const rawSpan = maxGap - minGap;
+      const randomMins = minGap + seedNoise * rawSpan;
+      const wholeMins = Math.max(minGap, Math.min(maxGap, Math.round(randomMins)));
+      const secondsJitter = Math.floor(Math.abs(Math.sin(i * 1337 + 11)) * 59);
+
+      batchGapMins = wholeMins + Number((secondsJitter / 60).toFixed(2));
+      batchGapText = `+${wholeMins}m ${secondsJitter}s`;
+
+      accumulatedTimeMs += (wholeMins * 60 + secondsJitter) * 1000;
     }
 
     const scheduledTime = new Date(accumulatedTimeMs);
@@ -947,6 +1004,8 @@ export function generateCampaignBatches(params: {
       saves: batchSaves,
       reposts: batchReposts,
       likesProvider,
+      gapMinutes: batchGapMins,
+      gapText: batchGapText,
       status: 'pending',
     });
   }

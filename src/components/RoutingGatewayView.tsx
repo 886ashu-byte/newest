@@ -20,7 +20,7 @@ import { DEFAULT_ROUTING_CONFIG } from '../utils/algorithmicEngine';
 export const RoutingGatewayView: React.FC = () => {
   const [testMetric, setTestMetric] = useState<'views' | 'micro_likes' | 'macro_likes' | 'saves' | 'shares' | 'reposts'>('micro_likes');
   const [testQuantity, setTestQuantity] = useState<number>(7);
-  const [testLink, setTestLink] = useState('https://www.instagram.com/reel/C8qXYZ99abc/');
+  const [testLink, setTestLink] = useState('');
   const [dispatchResult, setDispatchResult] = useState<any | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
 
@@ -31,7 +31,7 @@ export const RoutingGatewayView: React.FC = () => {
         provider: 'ReliableSMM',
         serviceId: 8024,
         serviceName: 'Instagram High-Retention Views [Service 8024]',
-        min: 10,
+        min: 100,
         type: 'Views Highway'
       };
     }

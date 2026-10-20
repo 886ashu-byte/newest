@@ -55,8 +55,8 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
   // Wizard State
   const [campaignName, setCampaignName] = useState('Viral Reels Algorithmic Push #01');
   const [platform, setPlatform] = useState<Platform>('instagram');
-  const [targetUrl, setTargetUrl] = useState('https://www.instagram.com/reel/C8qXYZ99abc/');
-  const [handle, setHandle] = useState('@target_creator');
+  const [targetUrl, setTargetUrl] = useState('');
+  const [handle, setHandle] = useState('');
   const [organicMode, setOrganicMode] = useState(true);
 
   // Metrics
@@ -82,7 +82,8 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
       { id: 6, x: 0.95, y: 0.20 },
     ];
   });
-  const [speedInterval, setSpeedInterval] = useState<SpeedInterval>('interval_35m');
+  const [speedInterval, setSpeedInterval] = useState<SpeedInterval>('interval_20_35m');
+  const [cadenceRange, setCadenceRange] = useState<{ minMins: number; maxMins: number }>({ minMins: 20, maxMins: 35 });
   const [bezierPoints, setBezierPoints] = useState<BezierControlPoints>({
     p0: { x: 0, y: 0 },
     p1: { x: 0.25, y: 0.75 },
@@ -113,8 +114,10 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
       routingConfig: DEFAULT_ROUTING_CONFIG,
       curvePoints,
       region: audienceRegion,
+      cadenceRange,
+      speedInterval,
     });
-  }, [metrics, durationHours, intervalMinutes, curve, bezierPoints, jitterPercent, seedChunkProtocol, curvePoints, audienceRegion]);
+  }, [metrics, durationHours, intervalMinutes, curve, bezierPoints, jitterPercent, seedChunkProtocol, curvePoints, audienceRegion, cadenceRange, speedInterval]);
 
   // Assembled Campaign object
   const assembledCampaign: Campaign = useMemo(() => {
@@ -134,6 +137,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
       curvePoints,
       bezierPoints,
       speedInterval,
+      cadenceRange,
       intervalMinutes,
       jitterPercent,
       seedChunkProtocol,
@@ -159,6 +163,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     curvePoints,
     bezierPoints,
     speedInterval,
+    cadenceRange,
     intervalMinutes,
     jitterPercent,
     seedChunkProtocol,
@@ -271,6 +276,8 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             setAudienceRegion={setAudienceRegion}
             speedInterval={speedInterval}
             setSpeedInterval={setSpeedInterval}
+            cadenceRange={cadenceRange}
+            setCadenceRange={setCadenceRange}
             curvePoints={curvePoints}
             setCurvePoints={setCurvePoints}
           />
