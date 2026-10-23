@@ -397,9 +397,11 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
                 <div className="flex items-center flex-wrap gap-1.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1 text-xs font-mono transition-colors">
                   {[
                     { id: 'interval_20_35m', label: '20–35m', min: 20, max: 35 },
-                    { id: 'interval_25_40m', label: '25–40m', min: 25, max: 40 },
-                    { id: 'interval_35_50m', label: '35–50m', min: 35, max: 50 },
-                    { id: 'interval_45_60m', label: '45–60m', min: 45, max: 60 },
+                    { id: 'interval_25m', label: '25m (20–30m)', min: 20, max: 30 },
+                    { id: 'interval_35m', label: '35m (25–45m)', min: 25, max: 45 },
+                    { id: 'interval_45m', label: '45m (35–55m)', min: 35, max: 55 },
+                    { id: 'interval_60m', label: '60m (45–65m)', min: 45, max: 65 },
+                    { id: 'interval_25_60m', label: '25–60m', min: 25, max: 60 },
                   ].map((s) => {
                     const isSelected = speedInterval === s.id || (cadenceRange?.minMins === s.min && cadenceRange?.maxMins === s.max);
                     return (
@@ -412,7 +414,7 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
                             setCadenceRange({ minMins: s.min, maxMins: s.max });
                           }
                         }}
-                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-purple-600 text-white font-bold shadow-sm'
                             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -428,9 +430,9 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
               {/* Dynamic Variance Explanation Note */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/60 dark:border-purple-800/40 p-2.5 rounded-xl text-[11px] font-mono text-slate-600 dark:text-slate-300">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-purple-600 dark:text-purple-400 font-bold">Entropy Guard:</span>
+                  <span className="text-purple-600 dark:text-purple-400 font-bold">Random Gap Variance:</span>
                   <span>
-                    Each batch receives a unique random time gap between{' '}
+                    Each batch will send with a unique random time gap between{' '}
                     <strong className="text-purple-600 dark:text-purple-300 font-bold">{cadenceRange?.minMins || 20}m</strong> and{' '}
                     <strong className="text-purple-600 dark:text-purple-300 font-bold">{cadenceRange?.maxMins || 35}m</strong>.
                   </span>

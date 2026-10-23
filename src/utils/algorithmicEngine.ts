@@ -568,6 +568,7 @@ export function getIntervalMinutes(interval: SpeedInterval): number {
     case 'interval_25_40m': return 32; // mid-point of 25-40
     case 'interval_35_50m': return 42; // mid-point of 35-50
     case 'interval_45_60m': return 52; // mid-point of 45-60
+    case 'interval_25_60m': return 42; // mid-point of 25-60
     case 'interval_25m': return 25;
     case 'interval_35m': return 35;
     case 'interval_45m': return 45;
@@ -604,62 +605,64 @@ export function getCadenceRange(
       return { minMins: 35, maxMins: 50, label: '35–50m (Steady)' };
     case 'interval_45_60m':
       return { minMins: 45, maxMins: 60, label: '45–60m (Stealth)' };
+    case 'interval_25_60m':
+      return { minMins: 25, maxMins: 60, label: '25–60m (Wide Organic)' };
     case 'interval_25m':
-      return { minMins: 20, maxMins: 30, label: '20–30m' };
+      return { minMins: 20, maxMins: 30, label: '25m (20–30m)' };
     case 'interval_35m':
-      return { minMins: 20, maxMins: 35, label: '20–35m' };
+      return { minMins: 25, maxMins: 45, label: '35m (25–45m)' };
     case 'interval_45m':
-      return { minMins: 35, maxMins: 50, label: '35–50m' };
+      return { minMins: 35, maxMins: 55, label: '45m (35–55m)' };
     case 'interval_60m':
-      return { minMins: 45, maxMins: 60, label: '45–60m' };
+      return { minMins: 45, maxMins: 65, label: '60m (45–65m)' };
     default:
       return { minMins: 20, maxMins: 35, label: '20–35m' };
   }
 }
 
 /**
- * Apply deterministic yet organic jitter to eliminate robotic round numbers (e.g. 100 -> 97, 103)
+ * Apply deterministic yet organic jitter to eliminate robotic round numbers
+ * Guaranteed to NEVER drop below minFloor (e.g., min 100 views, min 10 shares)
  */
-export function applyJitter(value: number, jitterPercent: number, seed: number): number {
+export function applyJitter(value: number, jitterPercent: number, seed: number, minFloor: number = 1): number {
   if (value <= 0) return 0;
-  if (jitterPercent <= 0) return value;
+  const safeBase = Math.max(minFloor, value);
+  if (jitterPercent <= 0) return safeBase;
 
   // Pseudo-random deterministic factor between -jitterPercent and +jitterPercent
   const noise = (Math.sin(seed * 9973 + 13) + Math.cos(seed * 4099 + 7)) / 2;
   const factor = 1 + (noise * (jitterPercent / 100));
-  let rawJittered = Math.round(value * factor);
+  let rawJittered = Math.round(safeBase * factor);
 
-  // For small base numbers, ensure rounding doesn't eliminate organic jitter variance
-  if (rawJittered === value && jitterPercent >= 10 && value >= 2) {
-    const tweakNoise = Math.sin(seed * 1337 + 19);
-    const tweak = tweakNoise > 0.2 ? 1 : tweakNoise < -0.2 ? -1 : 0;
-    rawJittered = Math.max(1, rawJittered + tweak);
+  if (rawJittered < minFloor) {
+    rawJittered = minFloor;
   }
 
   // Eliminate ending with 0 or 00 if original was round, to avoid bot red flags
-  let finalVal = Math.max(1, rawJittered);
-  if (finalVal >= 10 && finalVal % 10 === 0) {
-    const tweak = (seed % 2 === 0 ? 1 : -1) * (1 + (seed % 4));
-    finalVal = Math.max(1, finalVal + tweak);
+  // If subtracting would breach minFloor, ALWAYS ADD
+  let finalVal = Math.max(minFloor, rawJittered);
+  if (finalVal % 10 === 0) {
+    const tweak = 1 + (seed % 4);
+    if (finalVal - tweak < minFloor) {
+      finalVal += tweak;
+    } else {
+      const sign = seed % 2 === 0 ? 1 : -1;
+      finalVal = Math.max(minFloor, finalVal + sign * tweak);
+    }
   }
 
-  return finalVal;
+  return Math.max(minFloor, finalVal);
 }
 
-/**
- * Generates the full scheduled batch list with:
- * - Algorithmic curve distribution
- * - Seed chunk protocol (Batch #0 and #1: views only)
- * - Micro vs Macro likes split routing tag
- * - Jitter application
 /**
  * Distributes a metric across an array of batch weights with organic jitter,
  * ensuring:
  * 1. The sum of all allocated quantities strictly equals totalQuantity.
- * 2. Density follows the algorithmic curve weights.
- * 3. Pseudo-random deterministic jitter is applied so numbers look natural (never robotic).
- * 4. Sparse metrics (where totalQuantity < batchCount) are clustered into realistic active pulses
- *    rather than rounding down to zero.
+ * 2. Density follows the algorithmic curve weights with rich dynamic variance.
+ * 3. Any non-zero allocation is STRICTLY >= minNonZeroParcel (e.g. 100 for views, 10 for shares).
+ *    Never generates 97, 98, 99 views or 8, 9 shares that SMM panels reject.
+ * 4. Sparse metrics (where totalQuantity < batchCount * minParcel) are clustered into
+ *    realistic active pulses of at least minNonZeroParcel rather than rounding down.
  */
 export function distributeMetricWithCurveAndJitter(
   totalQuantity: number,
@@ -669,6 +672,7 @@ export function distributeMetricWithCurveAndJitter(
   options?: {
     minNonZeroParcel?: number;
     clusterIfSparse?: boolean;
+    enhanceVariance?: boolean;
   }
 ): number[] {
   const n = weights.length;
@@ -676,8 +680,25 @@ export function distributeMetricWithCurveAndJitter(
   if (totalQuantity <= 0) return new Array(n).fill(0);
 
   const minParcel = Math.max(1, options?.minNonZeroParcel || 1);
-  const totalWeight = weights.reduce((sum, w) => sum + Math.max(0.01, w), 0);
   const result: number[] = new Array(n).fill(0);
+
+  // If total quantity is smaller than one minParcel, allocate entire minParcel to the primary batch
+  // so the external SMM panel order is valid and never rejected for being under minimal.
+  if (totalQuantity < minParcel) {
+    result[0] = minParcel;
+    return result;
+  }
+
+  // Calculate weights with natural wave modulation for richer organic variance
+  const modulatedWeights = weights.map((w, i) => {
+    const baseW = Math.max(0.01, w);
+    if (options?.enhanceVariance) {
+      const wave = 1.0 + (Math.sin(i * 1.57 + seedOffset) * 0.22 + Math.cos(i * 0.83 + 1.7) * 0.12);
+      return Math.max(0.01, baseW * wave);
+    }
+    return baseW;
+  });
+  const totalWeight = modulatedWeights.reduce((sum, w) => sum + w, 0) || 1;
 
   // If we can distribute at least minParcel to all batches, do dense distribution
   const canDoDense = totalQuantity >= n * minParcel;
@@ -687,9 +708,14 @@ export function distributeMetricWithCurveAndJitter(
     const rawAllocations: number[] = [];
 
     for (let i = 0; i < n; i++) {
-      const w = Math.max(0.01, weights[i]);
+      const w = modulatedWeights[i];
       const baseShare = (totalQuantity * w) / totalWeight;
-      const jittered = applyJitter(Math.max(minParcel, Math.round(baseShare)), jitterPercent, i * 17 + seedOffset);
+      const jittered = applyJitter(
+        Math.max(minParcel, Math.round(baseShare)), 
+        Math.max(15, jitterPercent), 
+        i * 17 + seedOffset,
+        minParcel
+      );
       rawAllocations.push(jittered);
       accumulated += jittered;
     }
@@ -699,9 +725,15 @@ export function distributeMetricWithCurveAndJitter(
       let currentSum = 0;
       for (let i = 0; i < n; i++) {
         let scaled = Math.max(minParcel, Math.round(rawAllocations[i] * scale));
-        // Anti-round jitter
-        if (scaled >= 10 && scaled % 10 === 0) {
-          scaled += ((i + seedOffset) % 2 === 0 ? 1 : -1) * (1 + ((i + seedOffset) % 3));
+        // Anti-round jitter: never breach minParcel
+        if (scaled % 10 === 0) {
+          const tweak = 1 + ((i + seedOffset) % 4);
+          if (scaled - tweak < minParcel) {
+            scaled += tweak;
+          } else {
+            const sign = (i + seedOffset) % 2 === 0 ? 1 : -1;
+            scaled = Math.max(minParcel, scaled + sign * tweak);
+          }
         }
         result[i] = scaled;
         currentSum += scaled;
@@ -709,7 +741,7 @@ export function distributeMetricWithCurveAndJitter(
 
       // Distribute any remainder to top-weight batches without breaking minParcel
       let diff = totalQuantity - currentSum;
-      const indicesByWeight = [...Array(n).keys()].sort((a, b) => weights[b] - weights[a]);
+      const indicesByWeight = [...Array(n).keys()].sort((a, b) => modulatedWeights[b] - modulatedWeights[a]);
       let ptr = 0;
       while (diff !== 0 && ptr < n * 4) {
         const idx = indicesByWeight[ptr % n];
@@ -730,13 +762,13 @@ export function distributeMetricWithCurveAndJitter(
 
     const activeIndices: number[] = [];
 
-    // 1. Guarantee early presence: the first parcel is placed in the initial batches (index 0 or 1)
-    const firstIdx = (seedOffset % 2); // 0 or 1
+    // 1. Guarantee early presence: first parcel placed in initial batches (index 0 or 1)
+    const firstIdx = seedOffset % 2; // 0 or 1
     activeIndices.push(firstIdx);
 
     // 2. Stagger second early parcel if parcelCount > 1
     if (parcelCount > 1) {
-      const secondIdx = firstIdx === 0 ? (1 + (seedOffset % 2)) : 2;
+      const secondIdx = firstIdx === 0 ? 1 + (seedOffset % 2) : 2;
       if (!activeIndices.includes(secondIdx) && secondIdx < n) {
         activeIndices.push(secondIdx);
       }
@@ -754,13 +786,13 @@ export function distributeMetricWithCurveAndJitter(
     const remainingNeeded = parcelCount - activeIndices.length;
     if (remainingNeeded > 0) {
       const startRemaining = Math.min(n - 1, 5);
-      const remainingWeight = weights.slice(startRemaining).reduce((a, b) => a + Math.max(0.01, b), 0);
+      const remainingWeight = modulatedWeights.slice(startRemaining).reduce((a, b) => a + Math.max(0.01, b), 0);
       const step = remainingWeight / remainingNeeded;
       let wAcc = 0;
       let threshold = step * 0.5;
 
       for (let i = startRemaining; i < n && activeIndices.length < parcelCount; i++) {
-        wAcc += Math.max(0.01, weights[i]);
+        wAcc += Math.max(0.01, modulatedWeights[i]);
         if (wAcc >= threshold) {
           if (!activeIndices.includes(i)) activeIndices.push(i);
           threshold += step;
@@ -770,7 +802,7 @@ export function distributeMetricWithCurveAndJitter(
 
     // Fill remaining if needed from highest weight batches
     if (activeIndices.length < parcelCount) {
-      const sorted = [...Array(n).keys()].sort((a, b) => weights[b] - weights[a]);
+      const sorted = [...Array(n).keys()].sort((a, b) => modulatedWeights[b] - modulatedWeights[a]);
       for (const idx of sorted) {
         if (!activeIndices.includes(idx)) {
           activeIndices.push(idx);
@@ -783,14 +815,19 @@ export function distributeMetricWithCurveAndJitter(
 
     // Distribute totalQuantity among active indices
     const numActive = activeIndices.length;
-    const activeWeights = activeIndices.map(idx => weights[idx]);
+    const activeWeights = activeIndices.map(idx => modulatedWeights[idx]);
     const activeWeightSum = activeWeights.reduce((a, b) => a + b, 0) || 1;
 
     let distributedSum = 0;
     const parcels: number[] = [];
     for (let k = 0; k < numActive; k++) {
       const base = (totalQuantity * activeWeights[k]) / activeWeightSum;
-      const jVal = applyJitter(Math.max(minParcel, Math.round(base)), jitterPercent, k * 23 + seedOffset);
+      const jVal = applyJitter(
+        Math.max(minParcel, Math.round(base)), 
+        Math.max(15, jitterPercent), 
+        k * 23 + seedOffset,
+        minParcel
+      );
       parcels.push(jVal);
       distributedSum += jVal;
     }
@@ -800,9 +837,15 @@ export function distributeMetricWithCurveAndJitter(
       let curr = 0;
       for (let k = 0; k < numActive; k++) {
         let val = Math.max(minParcel, Math.round(parcels[k] * scale));
-        // Anti-round number check
-        if (val >= 10 && val % 10 === 0) {
-          val += ((k + seedOffset) % 2 === 0 ? 1 : -1) * (1 + ((k + seedOffset) % 3));
+        // Anti-round number check: never breach minParcel
+        if (val % 10 === 0) {
+          const tweak = 1 + ((k + seedOffset) % 4);
+          if (val - tweak < minParcel) {
+            val += tweak;
+          } else {
+            const sign = (k + seedOffset) % 2 === 0 ? 1 : -1;
+            val = Math.max(minParcel, val + sign * tweak);
+          }
         }
         parcels[k] = val;
         curr += val;
@@ -828,6 +871,13 @@ export function distributeMetricWithCurveAndJitter(
     }
   }
 
+  // Absolute Hard SMM Guarantee: Any non-zero parcel must strictly be >= minParcel
+  for (let i = 0; i < n; i++) {
+    if (result[i] > 0 && result[i] < minParcel) {
+      result[i] = minParcel;
+    }
+  }
+
   return result;
 }
 
@@ -835,10 +885,11 @@ export function distributeMetricWithCurveAndJitter(
  * Generates the full scheduled batch list with:
  * - Algorithmic curve distribution
  * - Proper organic jitter (views vary organically and never flatline)
- * - ReliableSMM Service #8024 integration (min 10 views per order)
+ * - ReliableSMM Service #8024 integration (min 100 views per order)
  * - Seed chunk protocol (Batch #0 and #1: views only, engagement held)
  * - Micro vs Macro likes split routing tag (JAP #1778 for 5-9, ReliableSMM #7147 for 10+)
  * - Golden ratio engagement distribution with jitter (never rounds to zero)
+ * - ReliableSMM #2060 shares minimum 10 order enforcement
  */
 export function generateCampaignBatches(params: {
   metrics: CampaignMetrics;
@@ -881,14 +932,15 @@ export function generateCampaignBatches(params: {
   const totalBatches = Math.max(2, Math.round(totalMinutes / avgGap));
   const normalizedWeights = getCurveDensityWeights(curve, totalBatches, bezierPoints, durationHours, curvePoints, region);
 
-  // 1. Distribute VIEWS across all batches with curve shaping & jitter
-  // ReliableSMM Service #8024 min order requirement is 100 views
+  // 1. Distribute VIEWS across all batches with curve shaping & enhanced organic variance
+  // ReliableSMM Service #8024 min order requirement is strictly 100 views
+  const effectiveJitter = Math.max(18, jitterPercent || 20);
   const viewsPerBatch = distributeMetricWithCurveAndJitter(
     metrics.views,
     normalizedWeights,
-    jitterPercent,
+    effectiveJitter,
     11,
-    { minNonZeroParcel: 100, clusterIfSparse: true }
+    { minNonZeroParcel: 100, clusterIfSparse: true, enhanceVariance: true }
   );
 
   // 2. Engagement indices (Batch #0 and #1 are Seed warmup if seedChunkProtocol enabled)
@@ -900,16 +952,16 @@ export function generateCampaignBatches(params: {
   const likesPerBatch = distributeMetricWithCurveAndJitter(
     metrics.likes,
     engWeights,
-    jitterPercent,
+    effectiveJitter,
     101,
-    { minNonZeroParcel: 5, clusterIfSparse: true }
+    { minNonZeroParcel: 5, clusterIfSparse: true, enhanceVariance: true }
   );
 
   // Comments: distributed in parcels of 1-3
   const commentsPerBatch = distributeMetricWithCurveAndJitter(
     metrics.comments,
     engWeights,
-    jitterPercent,
+    effectiveJitter,
     202,
     { minNonZeroParcel: 1, clusterIfSparse: true }
   );
@@ -918,25 +970,25 @@ export function generateCampaignBatches(params: {
   const sharesPerBatch = distributeMetricWithCurveAndJitter(
     metrics.shares,
     engWeights,
-    jitterPercent,
+    effectiveJitter,
     303,
-    { minNonZeroParcel: 10, clusterIfSparse: true }
+    { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
   );
 
-  // Saves: distributed in parcels of 2-6
+  // Saves: distributed in parcels of 2-6 (ReliableSMM #7841 min 1)
   const savesPerBatch = distributeMetricWithCurveAndJitter(
     metrics.saves,
     engWeights,
-    jitterPercent,
+    effectiveJitter,
     404,
-    { minNonZeroParcel: 2, clusterIfSparse: true }
+    { minNonZeroParcel: 2, clusterIfSparse: true, enhanceVariance: true }
   );
 
-  // Reposts: distributed in parcels of 1-2
+  // Reposts: distributed in parcels of 1-2 (ReliableSMM #7842 min 1)
   const repostsPerBatch = distributeMetricWithCurveAndJitter(
     metrics.reposts,
     engWeights,
-    jitterPercent,
+    effectiveJitter,
     505,
     { minNonZeroParcel: 1, clusterIfSparse: true }
   );
@@ -952,16 +1004,20 @@ export function generateCampaignBatches(params: {
 
     if (i > 0) {
       // Dynamic random gap strictly within the selected [minGap, maxGap] range for each batch
-      const seedNoise = (Math.sin(i * 8191 + 37) + Math.cos(i * 4253 + 19) + 2) / 4;
+      // High-entropy pseudo-random generator across the full range
+      const h1 = Math.abs(Math.sin(i * 12345.6789 + (startDate?.getTime() || 42) % 10000));
+      const h2 = Math.abs(Math.cos(i * 98765.4321 + (i % 7) * 31.7));
+      const randFraction = ((h1 * 10000 + h2 * 1000) % 1000) / 1000;
+
       const rawSpan = maxGap - minGap;
-      const randomMins = minGap + seedNoise * rawSpan;
-      const wholeMins = Math.max(minGap, Math.min(maxGap, Math.round(randomMins)));
-      const secondsJitter = Math.floor(Math.abs(Math.sin(i * 1337 + 11)) * 59);
+      const selectedMinutesFloat = minGap + (randFraction * rawSpan);
+      const wholeMins = Math.max(minGap, Math.min(maxGap, Math.floor(selectedMinutesFloat)));
+      const secondsRemainder = Math.floor(((selectedMinutesFloat - wholeMins) * 60)) % 60;
 
-      batchGapMins = wholeMins + Number((secondsJitter / 60).toFixed(2));
-      batchGapText = `+${wholeMins}m ${secondsJitter}s`;
+      batchGapMins = wholeMins + Number((secondsRemainder / 60).toFixed(2));
+      batchGapText = `+${wholeMins}m ${secondsRemainder.toString().padStart(2, '0')}s`;
 
-      accumulatedTimeMs += (wholeMins * 60 + secondsJitter) * 1000;
+      accumulatedTimeMs += (wholeMins * 60 + secondsRemainder) * 1000;
     }
 
     const scheduledTime = new Date(accumulatedTimeMs);

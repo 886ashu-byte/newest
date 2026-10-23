@@ -451,6 +451,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
   // 1. Views Routing -> ReliableSMM (Service 8024, Instagram High-Retention Views) [T+0 min]
   if (batch.views > 0 && !batch.orderIds.views) {
     const viewsQty = Math.max(100, Math.round(batch.views));
+    batch.views = viewsQty;
     batch.executionLogs.push(`[${timeStr}] [T+0m] Sending ${viewsQty} views to ReliableSMM (Service #8024)...`);
     const viewsRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
       service: 8024,
@@ -652,6 +653,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     const subTime = new Date().toLocaleTimeString();
     if (batch.shares > 0 && !batch.orderIds.shares) {
       const sharesQty = Math.max(10, Math.round(batch.shares));
+      batch.shares = sharesQty;
       const sharesRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
         service: 2060,
         link: targetLink,

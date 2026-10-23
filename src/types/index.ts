@@ -31,6 +31,7 @@ export type SpeedInterval =
   | 'interval_25_40m'
   | 'interval_35_50m'
   | 'interval_45_60m'
+  | 'interval_25_60m'
   | 'interval_25m'
   | 'interval_35m'
   | 'interval_45m'

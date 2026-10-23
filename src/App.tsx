@@ -54,53 +54,10 @@ export default function App() {
       const saved = localStorage.getItem('smm_campaigns_cache');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {}
-
-    const demoMetrics = computeGoldenRatioMetrics(10000);
-    const demoBatches = generateCampaignBatches({
-      metrics: demoMetrics,
-      durationHours: 24,
-      intervalMinutes: 2,
-      curve: 'trending_rocket',
-      jitterPercent: 18,
-      seedChunkProtocol: true,
-      startDate: new Date(Date.now() - 2 * 60 * 1000),
-      routingConfig: DEFAULT_ROUTING_CONFIG,
-    });
-
-    if (demoBatches.length > 0) {
-      demoBatches[0].status = 'success';
-      demoBatches[0].dispatchedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-      demoBatches[0].orderIds = { views: 'ORD-REL-8024-882194' };
-    }
-
-    return [{
-      id: 'camp_live_demo1',
-      name: 'Viral Reels Algorithmic Push #01',
-      platform: 'instagram',
-      targetUrl: 'https://www.instagram.com/reel/viral_post_demo/',
-      handle: '@aesthetic.vibes',
-      organicMode: true,
-      metrics: demoMetrics,
-      commentNiche: 'Lifestyle',
-      generatedComments: getRandomPresetComments('Lifestyle', 12),
-      durationHours: 24,
-      curve: 'trending_rocket',
-      bezierPoints: { p0: { x: 0, y: 0 }, p1: { x: 0.25, y: 0.75 }, p2: { x: 0.75, y: 0.35 }, p3: { x: 1, y: 1 } },
-      speedInterval: 'interval_20_35m',
-      intervalMinutes: 28,
-      jitterPercent: 18,
-      seedChunkProtocol: true,
-      batches: demoBatches,
-      status: 'running',
-      createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-      startedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-      currentBatchIndex: 1,
-      riskAudit: computeRiskAudit(demoMetrics, 'trending_rocket', 18, true, 24, 2),
-      routingConfig: DEFAULT_ROUTING_CONFIG,
-    }];
+    return [];
   });
 
   // Sync panels & campaigns from server
