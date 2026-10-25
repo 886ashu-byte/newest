@@ -191,6 +191,46 @@ export default function App() {
     });
   };
 
+  // Edit campaign: Update properties on server and cache
+  const handleEditCampaign = async (updatedCampaign: Campaign) => {
+    try {
+      const res = await fetch(`/api/campaigns/${updatedCampaign.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedCampaign)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCampaigns(prev => {
+          const updated = prev.map(c => c.id === updatedCampaign.id ? data.campaign : c);
+          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
+          return updated;
+        });
+      }
+    } catch (e) {
+      console.error('Failed to save campaign edit', e);
+    }
+  };
+
+  // Clone campaign: Clone on server and prepend to list
+  const handleCloneCampaign = async (campaignId: string) => {
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/clone`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => {
+            const updated = [data.campaign, ...prev];
+            try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
+            return updated;
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to clone campaign', e);
+    }
+  };
+
   const activeCount = campaigns.filter(c => c.status === 'running').length;
 
   return (
@@ -218,6 +258,8 @@ export default function App() {
             onPauseCampaign={handlePauseCampaign}
             onResumeCampaign={handleResumeCampaign}
             onDeleteCampaign={handleDeleteCampaign}
+            onEditCampaign={handleEditCampaign}
+            onCloneCampaign={handleCloneCampaign}
           />
         )}
       </main>

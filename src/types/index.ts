@@ -199,6 +199,13 @@ export interface Campaign {
   currentBatchIndex: number;
   riskAudit: AlgorithmicRiskAudit;
   routingConfig: ProviderRoutingConfig;
+  autoPauseOnServiceFailure?: boolean; // When any SMM service/API is unavailable or fails, automatically pause campaign
+  lastAutoPause?: {
+    timestamp: string;
+    serviceName: string;
+    serviceId: number | string;
+    error: string;
+  };
 }
 
 export interface SmmPanel {

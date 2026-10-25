@@ -4,6 +4,7 @@ import {
   CheckCircle2, 
   AlertCircle, 
   ShieldCheck, 
+  ShieldAlert,
   Globe
 } from 'lucide-react';
 import { Platform } from '../types';
@@ -20,6 +21,8 @@ interface Step1Props {
   setOrganicMode: (m: boolean) => void;
   campaignName: string;
   setCampaignName: (name: string) => void;
+  autoPauseOnServiceFailure?: boolean;
+  setAutoPauseOnServiceFailure?: (val: boolean) => void;
 }
 
 export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
@@ -33,6 +36,8 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
   setOrganicMode,
   campaignName,
   setCampaignName,
+  autoPauseOnServiceFailure = true,
+  setAutoPauseOnServiceFailure,
 }) => {
   const [urlStatus, setUrlStatus] = useState<{
     isValid: boolean;
@@ -303,6 +308,54 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
           </label>
         </div>
       </div>
+
+      {/* Auto-Pause Circuit Breaker on Service Outage Toggle */}
+      {setAutoPauseOnServiceFailure && (
+        <div className={`p-5 rounded-2xl border transition-all ${
+          autoPauseOnServiceFailure 
+            ? 'bg-gradient-to-r from-purple-500/10 via-white to-slate-50 dark:from-purple-950/40 dark:via-slate-900 dark:to-slate-900/60 border-purple-500/40 shadow-sm dark:shadow-purple-500/5'
+            : 'bg-white dark:bg-slate-900/40 border-slate-200 dark:border-slate-800'
+        }`}>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                autoPauseOnServiceFailure 
+                  ? 'bg-purple-100 text-purple-700 border border-purple-300 dark:bg-purple-500/20 dark:text-purple-400 dark:border-purple-500/40' 
+                  : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+              }`}>
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-slate-900 dark:text-white text-sm">
+                    Auto-Pause on Service Outage
+                  </h4>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border font-bold ${
+                    autoPauseOnServiceFailure 
+                      ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-500/20 dark:text-purple-300 dark:border-purple-500/30' 
+                      : 'bg-slate-100 text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                  }`}>
+                    {autoPauseOnServiceFailure ? 'AUTO-PAUSE ACTIVE' : 'DISABLED'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                  Automatically pauses the campaign immediately if any SMM provider API reports an error, insufficient balance, or unavailable service, preventing wasted budget.
+                </p>
+              </div>
+            </div>
+
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+              <input
+                type="checkbox"
+                checked={autoPauseOnServiceFailure}
+                onChange={(e) => setAutoPauseOnServiceFailure(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-12 h-6 bg-slate-300 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

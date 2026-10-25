@@ -58,6 +58,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
   const [targetUrl, setTargetUrl] = useState('');
   const [handle, setHandle] = useState('');
   const [organicMode, setOrganicMode] = useState(true);
+  const [autoPauseOnServiceFailure, setAutoPauseOnServiceFailure] = useState(true);
 
   // Metrics
   const [metrics, setMetrics] = useState<CampaignMetrics>(computeGoldenRatioMetrics(5000));
@@ -128,6 +129,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
       targetUrl,
       handle: handle || '@creator',
       organicMode,
+      autoPauseOnServiceFailure,
       metrics,
       commentNiche,
       generatedComments,
@@ -154,6 +156,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     targetUrl,
     handle,
     organicMode,
+    autoPauseOnServiceFailure,
     metrics,
     commentNiche,
     generatedComments,
@@ -257,6 +260,8 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             setOrganicMode={setOrganicMode}
             campaignName={campaignName}
             setCampaignName={setCampaignName}
+            autoPauseOnServiceFailure={autoPauseOnServiceFailure}
+            setAutoPauseOnServiceFailure={setAutoPauseOnServiceFailure}
           />
         )}
 

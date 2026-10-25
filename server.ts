@@ -373,8 +373,112 @@ app.post('/api/campaigns/:id/resume', (req: Request, res: Response) => {
   const campaign = campaigns.find(c => c.id === id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   campaign.status = 'running';
+  // Clear any previous auto-pause alert so it can attempt fresh execution
+  if (campaign.lastAutoPause) {
+    campaign.lastAutoPause = undefined;
+  }
   persistData();
   res.json({ campaign, message: 'Campaign resumed' });
+});
+
+// CAMPAIGNS: Edit / Update existing campaign (change anything)
+app.put('/api/campaigns/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const campaign = campaigns.find(c => c.id === id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+  const updates = req.body;
+  if (!updates) return res.status(400).json({ error: 'No update payload provided' });
+
+  // Update campaign properties
+  if (updates.name !== undefined) campaign.name = updates.name;
+  if (updates.targetUrl !== undefined) campaign.targetUrl = updates.targetUrl;
+  if (updates.handle !== undefined) campaign.handle = updates.handle;
+  if (updates.platform !== undefined) campaign.platform = updates.platform;
+  if (updates.organicMode !== undefined) campaign.organicMode = updates.organicMode;
+  if (updates.metrics !== undefined) campaign.metrics = updates.metrics;
+  if (updates.commentNiche !== undefined) campaign.commentNiche = updates.commentNiche;
+  if (updates.generatedComments !== undefined) campaign.generatedComments = updates.generatedComments;
+  if (updates.durationHours !== undefined) campaign.durationHours = updates.durationHours;
+  if (updates.curve !== undefined) campaign.curve = updates.curve;
+  if (updates.audienceRegion !== undefined) campaign.audienceRegion = updates.audienceRegion;
+  if (updates.curvePoints !== undefined) campaign.curvePoints = updates.curvePoints;
+  if (updates.bezierPoints !== undefined) campaign.bezierPoints = updates.bezierPoints;
+  if (updates.speedInterval !== undefined) campaign.speedInterval = updates.speedInterval;
+  if (updates.cadenceRange !== undefined) campaign.cadenceRange = updates.cadenceRange;
+  if (updates.intervalMinutes !== undefined) campaign.intervalMinutes = updates.intervalMinutes;
+  if (updates.jitterPercent !== undefined) campaign.jitterPercent = updates.jitterPercent;
+  if (updates.seedChunkProtocol !== undefined) campaign.seedChunkProtocol = updates.seedChunkProtocol;
+  if (updates.autoPauseOnServiceFailure !== undefined) {
+    campaign.autoPauseOnServiceFailure = updates.autoPauseOnServiceFailure;
+  }
+  if (updates.batches && Array.isArray(updates.batches)) {
+    campaign.batches = updates.batches;
+  }
+  if (updates.riskAudit) campaign.riskAudit = updates.riskAudit;
+
+  campaign.updatedAt = new Date().toISOString();
+  persistData();
+
+  console.log(`[Campaign Updated] "${campaign.name}" (${id})`);
+  res.json({ success: true, campaign, message: 'Campaign updated successfully' });
+});
+
+// CAMPAIGNS: Clone existing campaign
+app.post('/api/campaigns/:id/clone', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const original = campaigns.find(c => c.id === id);
+  if (!original) return res.status(404).json({ error: 'Source campaign not found' });
+
+  const cloneId = 'camp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+  const now = Date.now();
+
+  // Clone batches with refreshed timestamps and pending status
+  let cumulativeMs = now;
+  const clonedBatches = (original.batches || []).map((b: any, idx: number) => {
+    const gapMs = idx === 0 ? 0 : (b.gapMinutes ? Math.round(b.gapMinutes * 60 * 1000) : 25 * 60 * 1000);
+    cumulativeMs += gapMs;
+    return {
+      ...b,
+      batchIndex: idx,
+      scheduledAt: new Date(cumulativeMs).toISOString(),
+      status: 'pending',
+      dispatchedAt: undefined,
+      orderIds: {},
+      error: undefined,
+      executionLogs: []
+    };
+  });
+
+  const clonedCampaign = {
+    ...JSON.parse(JSON.stringify(original)),
+    id: cloneId,
+    name: `${original.name} (Copy)`,
+    status: 'running',
+    createdAt: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
+    completedAt: undefined,
+    currentBatchIndex: 0,
+    batches: clonedBatches,
+    autoPauseOnServiceFailure: original.autoPauseOnServiceFailure !== false,
+    lastAutoPause: undefined
+  };
+
+  campaigns.unshift(clonedCampaign);
+  persistData();
+
+  // Execute Batch #0 (Seed chunk) live for the cloned campaign
+  if (clonedCampaign.batches.length > 0) {
+    const firstBatch = clonedCampaign.batches[0];
+    await executeBatch(clonedCampaign, firstBatch, true);
+  }
+
+  console.log(`[Campaign Cloned] New: "${clonedCampaign.name}" (${cloneId}) from (${id})`);
+  res.status(201).json({
+    success: true,
+    campaign: clonedCampaign,
+    message: `Campaign cloned successfully as "${clonedCampaign.name}"`
+  });
 });
 
 // CAMPAIGNS: Delete
@@ -423,6 +527,32 @@ app.get('/api/orders/:orderId/status', async (req: Request, res: Response) => {
   const result = await callSmmApi(panel.apiUrl, panel.apiKey, 'status', { order: orderId });
   res.json({ orderId, provider: panel.name, result });
 });
+
+// Auto-pause circuit breaker: pauses campaign immediately if any service is down or returns error
+function checkAndTriggerAutoPause(
+  campaign: any, 
+  batch: any, 
+  providerName: string, 
+  serviceId: number | string, 
+  errorMsg: string
+): boolean {
+  if (campaign.autoPauseOnServiceFailure !== false) {
+    campaign.status = 'paused';
+    campaign.lastAutoPause = {
+      timestamp: new Date().toISOString(),
+      serviceName: providerName,
+      serviceId,
+      error: errorMsg
+    };
+    cancelCampaignTimers(campaign.id);
+    const alertLog = `[AUTO-PAUSED] Campaign automatically paused because ${providerName} (Service #${serviceId}) is unavailable or returned error: "${errorMsg}". Auto-pause prevented further failures.`;
+    batch.executionLogs.push(alertLog);
+    console.warn(`[Auto-Pause Circuit Breaker] ${campaign.id}: ${alertLog}`);
+    persistData();
+    return true;
+  }
+  return false;
+}
 
 // Real SMM Multi-Provider Execution Logic
 async function executeBatch(campaign: any, batch: any, isForceImmediate = false) {
@@ -495,6 +625,9 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         error: errorMsg,
         responsePayload: viewsRes
       });
+      if (checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 8024, errorMsg)) {
+        return;
+      }
     }
   }
 
@@ -527,8 +660,10 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.orderIds.saves = String(savesRes.order);
         batch.executionLogs.push(`[${subTime}] [T+1m] Saves: LIVE order placed on ReliableSMM (#7841). Order ID: #${savesRes.order}`);
       } else {
-        batch.orderIds.saves = `ERR: ${savesRes?.error || 'Failed'}`;
-        batch.executionLogs.push(`[${subTime}] [T+1m] Saves: ReliableSMM response: "${savesRes?.error || 'Failed'}" (Qty: ${savesQty})`);
+        const errorMsg = savesRes?.error || 'Failed';
+        batch.orderIds.saves = `ERR: ${errorMsg}`;
+        batch.executionLogs.push(`[${subTime}] [T+1m] Saves: ReliableSMM response: "${errorMsg}" (Qty: ${savesQty})`);
+        checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 7841, errorMsg);
       }
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_saves',
@@ -558,8 +693,10 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.orderIds.reposts = String(repRes.order);
         batch.executionLogs.push(`[${subTime}] [T+1m] Reposts: LIVE order placed on ReliableSMM (#7842). Order ID: #${repRes.order}`);
       } else {
-        batch.orderIds.reposts = `ERR: ${repRes?.error || 'Failed'}`;
-        batch.executionLogs.push(`[${subTime}] [T+1m] Reposts: ReliableSMM response: "${repRes?.error || 'Failed'}" (Qty: ${repostsQty})`);
+        const errorMsg = repRes?.error || 'Failed';
+        batch.orderIds.reposts = `ERR: ${errorMsg}`;
+        batch.executionLogs.push(`[${subTime}] [T+1m] Reposts: ReliableSMM response: "${errorMsg}" (Qty: ${repostsQty})`);
+        checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 7842, errorMsg);
       }
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_reposts',
@@ -596,8 +733,10 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
           batch.orderIds.likes = String(likesRes.order);
           batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: LIVE order placed on JAP (#1778). Order ID: #${likesRes.order}`);
         } else {
-          batch.orderIds.likes = `ERR: ${likesRes?.error || 'Failed'}`;
-          batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: JAP response: "${likesRes?.error || 'Failed'}" (Qty: ${microQty})`);
+          const errorMsg = likesRes?.error || 'Failed';
+          batch.orderIds.likes = `ERR: ${errorMsg}`;
+          batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: JAP response: "${errorMsg}" (Qty: ${microQty})`);
+          checkAndTriggerAutoPause(campaign, batch, 'Just Another Panel (JAP)', 1778, errorMsg);
         }
         dispatchLogs.push({
           id: 'log_' + Date.now() + '_likes_jap',
@@ -626,8 +765,10 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
           batch.orderIds.likes = String(likesRes.order);
           batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: LIVE order placed on ReliableSMM (#7147). Order ID: #${likesRes.order}`);
         } else {
-          batch.orderIds.likes = `ERR: ${likesRes?.error || 'Failed'}`;
-          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: ReliableSMM response: "${likesRes?.error || 'Failed'}" (Qty: ${macroQty})`);
+          const errorMsg = likesRes?.error || 'Failed';
+          batch.orderIds.likes = `ERR: ${errorMsg}`;
+          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: ReliableSMM response: "${errorMsg}" (Qty: ${macroQty})`);
+          checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 7147, errorMsg);
         }
         dispatchLogs.push({
           id: 'log_' + Date.now() + '_likes_rel',
@@ -663,8 +804,10 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.orderIds.shares = String(sharesRes.order);
         batch.executionLogs.push(`[${subTime}] [T+10m] Shares: LIVE order placed on ReliableSMM (#2060). Order ID: #${sharesRes.order}`);
       } else {
-        batch.orderIds.shares = `ERR: ${sharesRes?.error || 'Failed'}`;
-        batch.executionLogs.push(`[${subTime}] [T+10m] Shares: ReliableSMM response: "${sharesRes?.error || 'Failed'}" (Qty: ${sharesQty})`);
+        const errorMsg = sharesRes?.error || 'Failed';
+        batch.orderIds.shares = `ERR: ${errorMsg}`;
+        batch.executionLogs.push(`[${subTime}] [T+10m] Shares: ReliableSMM response: "${errorMsg}" (Qty: ${sharesQty})`);
+        checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 2060, errorMsg);
       }
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_shares',

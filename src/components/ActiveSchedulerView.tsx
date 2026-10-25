@@ -20,9 +20,22 @@ import {
   Sparkles,
   Trash2,
   FileText,
-  X
+  X,
+  Edit3,
+  Copy,
+  ShieldAlert,
+  AlertTriangle,
+  Save,
+  Sliders,
+  Globe,
+  SunMoon,
+  Rocket,
+  TrendingUp,
+  Flame,
+  ShieldCheck
 } from 'lucide-react';
-import { Campaign, ScheduledBatch } from '../types';
+import { Campaign, ScheduledBatch, AlgorithmicCurve } from '../types';
+import { generateCampaignBatches, parseTargetUrl, computeGoldenRatioMetrics } from '../utils/algorithmicEngine';
 
 interface ActiveSchedulerProps {
   campaigns: Campaign[];
@@ -32,6 +45,8 @@ interface ActiveSchedulerProps {
   onResumeCampaign: (campaignId: string) => void;
   onDeleteCampaign: (campaignId: string) => void;
   onSelectCampaignForWizard?: (campaign: Campaign) => void;
+  onEditCampaign?: (campaign: Campaign) => Promise<void>;
+  onCloneCampaign?: (campaignId: string) => Promise<void>;
 }
 
 export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
@@ -42,6 +57,8 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   onResumeCampaign,
   onDeleteCampaign,
   onSelectCampaignForWizard,
+  onEditCampaign,
+  onCloneCampaign,
 }) => {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     campaigns.length > 0 ? campaigns[0].id : null
@@ -49,6 +66,205 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
   const [campaignToDelete, setCampaignToDelete] = useState<Campaign | null>(null);
   const [inspectBatch, setInspectBatch] = useState<ScheduledBatch | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [cloningId, setCloningId] = useState<string | null>(null);
+  const [editModalCampaign, setEditModalCampaign] = useState<Campaign | null>(null);
+  const [editForm, setEditForm] = useState<{
+    id: string;
+    name: string;
+    targetUrl: string;
+    handle: string;
+    autoPauseOnServiceFailure: boolean;
+    views: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    saves: number;
+    reposts: number;
+    durationHours: number;
+    minMins: number;
+    maxMins: number;
+    curve: AlgorithmicCurve;
+    rebalancePendingBatches: boolean;
+  } | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toastMsg) {
+      const t = setTimeout(() => setToastMsg(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [toastMsg]);
+
+  // Clone Campaign
+  const handleClone = async (campaignId: string) => {
+    setCloningId(campaignId);
+    try {
+      if (onCloneCampaign) {
+        await onCloneCampaign(campaignId);
+      } else {
+        const res = await fetch(`/api/campaigns/${campaignId}/clone`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to clone');
+        }
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => [data.campaign, ...prev]);
+          setSelectedCampaignId(data.campaign.id);
+        }
+      }
+      setToastMsg({ text: 'Campaign cloned successfully with fresh scheduled batches!', type: 'success' });
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to clone campaign', type: 'error' });
+    } finally {
+      setCloningId(null);
+    }
+  };
+
+  // Toggle Auto-Pause on Outage / Error
+  const handleToggleAutoPause = async (campaign: Campaign) => {
+    const newVal = campaign.autoPauseOnServiceFailure === false;
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoPauseOnServiceFailure: newVal })
+      });
+      if (res.ok) {
+        setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, autoPauseOnServiceFailure: newVal } : c));
+        setToastMsg({
+          text: `Auto-pause on service outage is now ${newVal ? 'ENABLED' : 'DISABLED'} for this campaign.`,
+          type: 'info'
+        });
+      }
+    } catch (e) {
+      setToastMsg({ text: 'Failed to update auto-pause setting', type: 'error' });
+    }
+  };
+
+  // Open Edit Modal
+  const handleOpenEditModal = (campaign: Campaign) => {
+    setEditModalCampaign(campaign);
+    setEditForm({
+      id: campaign.id,
+      name: campaign.name,
+      targetUrl: campaign.targetUrl,
+      handle: campaign.handle,
+      autoPauseOnServiceFailure: campaign.autoPauseOnServiceFailure !== false,
+      views: campaign.metrics.views,
+      likes: campaign.metrics.likes,
+      comments: campaign.metrics.comments,
+      shares: campaign.metrics.shares,
+      saves: campaign.metrics.saves,
+      reposts: campaign.metrics.reposts,
+      durationHours: campaign.durationHours || 24,
+      minMins: campaign.cadenceRange?.minMins || 20,
+      maxMins: campaign.cadenceRange?.maxMins || 35,
+      curve: campaign.curve || 'trending_rocket',
+      rebalancePendingBatches: true
+    });
+  };
+
+  // Save Edit
+  const handleSaveEdit = async () => {
+    if (!editModalCampaign || !editForm) return;
+    setIsSavingEdit(true);
+
+    try {
+      const targetUrlParsed = parseTargetUrl(editForm.targetUrl, editModalCampaign.platform);
+      const cleanHandle = editForm.handle.trim() || targetUrlParsed.handle || editModalCampaign.handle;
+      const cleanTargetUrl = editForm.targetUrl.trim() || editModalCampaign.targetUrl;
+
+      const updatedMetrics = {
+        views: Math.max(100, Number(editForm.views) || 100),
+        likes: Math.max(5, Number(editForm.likes) || 5),
+        comments: Math.max(0, Number(editForm.comments) || 0),
+        shares: Math.max(10, Number(editForm.shares) || 10),
+        saves: Math.max(1, Number(editForm.saves) || 1),
+        reposts: Math.max(1, Number(editForm.reposts) || 1)
+      };
+
+      let updatedBatches = editModalCampaign.batches;
+
+      if (editForm.rebalancePendingBatches) {
+        // Preserve successful/dispatched batches
+        const doneBatches = editModalCampaign.batches.filter(b => b.status === 'success' || b.status === 'running');
+        const doneViews = doneBatches.reduce((s, b) => s + b.views, 0);
+        const doneLikes = doneBatches.reduce((s, b) => s + b.likes, 0);
+        const doneComments = doneBatches.reduce((s, b) => s + b.comments, 0);
+        const doneShares = doneBatches.reduce((s, b) => s + b.shares, 0);
+        const doneSaves = doneBatches.reduce((s, b) => s + b.saves, 0);
+        const doneReposts = doneBatches.reduce((s, b) => s + b.reposts, 0);
+
+        const remainingMetrics = {
+          views: Math.max(100, updatedMetrics.views - doneViews),
+          likes: Math.max(5, updatedMetrics.likes - doneLikes),
+          comments: Math.max(0, updatedMetrics.comments - doneComments),
+          shares: Math.max(10, updatedMetrics.shares - doneShares),
+          saves: Math.max(1, updatedMetrics.saves - doneSaves),
+          reposts: Math.max(1, updatedMetrics.reposts - doneReposts)
+        };
+
+        const newGenerated = generateCampaignBatches({
+          metrics: remainingMetrics,
+          durationHours: Math.max(1, editForm.durationHours),
+          intervalMinutes: Math.round((editForm.minMins + editForm.maxMins) / 2),
+          curve: editForm.curve,
+          jitterPercent: editModalCampaign.jitterPercent || 20,
+          seedChunkProtocol: false, // Warmup already done
+          cadenceRange: { minMins: editForm.minMins, maxMins: editForm.maxMins },
+          startDate: new Date()
+        });
+
+        // Merge: keep doneBatches, append reindexed newGenerated
+        const reindexedNew = newGenerated.map((b, idx) => ({
+          ...b,
+          batchIndex: doneBatches.length + idx,
+          isSeedBatch: false
+        }));
+        updatedBatches = [...doneBatches, ...reindexedNew];
+      }
+
+      const updatedCampaign: Campaign = {
+        ...editModalCampaign,
+        name: editForm.name.trim() || editModalCampaign.name,
+        targetUrl: cleanTargetUrl,
+        handle: cleanHandle,
+        autoPauseOnServiceFailure: editForm.autoPauseOnServiceFailure,
+        metrics: updatedMetrics,
+        durationHours: editForm.durationHours,
+        curve: editForm.curve,
+        cadenceRange: { minMins: editForm.minMins, maxMins: editForm.maxMins },
+        batches: updatedBatches
+      };
+
+      if (onEditCampaign) {
+        await onEditCampaign(updatedCampaign);
+      } else {
+        const res = await fetch(`/api/campaigns/${updatedCampaign.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedCampaign)
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to save');
+        }
+        const data = await res.json();
+        setCampaigns(prev => prev.map(c => c.id === updatedCampaign.id ? data.campaign : c));
+      }
+
+      setToastMsg({ text: `Campaign "${updatedCampaign.name}" updated successfully!`, type: 'success' });
+      setEditModalCampaign(null);
+      setEditForm(null);
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Error updating campaign', type: 'error' });
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
 
   // Sync selectedCampaignId if deleted or changed
   useEffect(() => {
@@ -111,6 +327,30 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         </div>
       </div>
 
+      {/* Floating Action Feedback Toast */}
+      {toastMsg && (
+        <div className={`p-3.5 rounded-xl border text-xs font-mono flex items-center justify-between gap-3 shadow-xl transition-all animate-fade-in ${
+          toastMsg.type === 'success' 
+            ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300' 
+            : toastMsg.type === 'error'
+            ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+            : 'bg-purple-950/80 border-purple-500/50 text-purple-300'
+        }`}>
+          <div className="flex items-center gap-2">
+            {toastMsg.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {toastMsg.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+            {toastMsg.type === 'info' && <ShieldAlert className="w-4 h-4 text-purple-400 shrink-0" />}
+            <span>{toastMsg.text}</span>
+          </div>
+          <button 
+            onClick={() => setToastMsg(null)}
+            className="text-slate-400 hover:text-white cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Main campaigns display */}
       {campaigns.length === 0 ? (
         <div className="bg-slate-950 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
@@ -136,6 +376,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 const completedBatches = camp.batches.filter(b => b.status === 'success').length;
                 const progressPct = Math.round((completedBatches / camp.batches.length) * 100);
                 const nextCountdown = getNextBatchCountdown(camp);
+                const isAutoPaused = camp.status === 'paused' && !!camp.lastAutoPause;
 
                 return (
                   <div
@@ -149,18 +390,20 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                   >
                     <div className="flex items-start justify-between">
                       <div className="truncate pr-2">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
                             {camp.platform}
                           </span>
                           <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                            camp.status === 'running' 
+                            isAutoPaused
+                              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold'
+                              : camp.status === 'running' 
                               ? 'bg-emerald-500/20 text-emerald-300' 
                               : camp.status === 'paused'
                               ? 'bg-amber-500/20 text-amber-300'
                               : 'bg-slate-800 text-slate-400'
                           }`}>
-                            {camp.status.toUpperCase()}
+                            {isAutoPaused ? 'AUTO-PAUSED' : camp.status.toUpperCase()}
                           </span>
                         </div>
                         <h4 className="font-bold text-white text-sm mt-1 truncate">
@@ -176,18 +419,36 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                           <div className="text-xs font-bold text-cyan-300">{progressPct}%</div>
                           <div className="text-[10px] text-slate-500">{completedBatches}/{camp.batches.length}</div>
                         </div>
-                        {/* Quick Delete from list */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setCampaignToDelete(camp);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
-                          title="Delete Campaign"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+
+                        {/* Quick Action Icons in List Item */}
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {/* Quick Clone button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleClone(camp.id);
+                            }}
+                            disabled={cloningId === camp.id}
+                            className="p-1 rounded hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 transition-all cursor-pointer"
+                            title="Clone Campaign"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Quick Delete from list */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCampaignToDelete(camp);
+                            }}
+                            className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
+                            title="Delete Campaign"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -213,6 +474,39 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           {/* Campaign Detail & Real-time Live Ticker */}
           {selectedCampaign && (
             <div className="lg:col-span-2 space-y-5">
+              {/* Circuit Breaker Auto-Pause Outage Banner */}
+              {selectedCampaign.status === 'paused' && selectedCampaign.lastAutoPause && (
+                <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-200 shadow-lg animate-fade-in font-mono">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold text-sm text-amber-300 flex items-center gap-2">
+                        <span>Circuit Breaker Auto-Paused Campaign</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300">
+                          PROTECTION ACTIVE
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-200/90 mt-1 leading-relaxed">
+                        Provider <strong>{selectedCampaign.lastAutoPause.serviceName}</strong> (Service #{selectedCampaign.lastAutoPause.serviceId}) reported:
+                        <span className="font-bold text-white bg-black/40 px-1.5 py-0.5 rounded ml-1 border border-amber-500/30">
+                          "{selectedCampaign.lastAutoPause.error}"
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-amber-400/80 mt-1">
+                        Subsequent orders were held automatically to prevent wasted budget. Click Resume once the provider is restored.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onResumeCampaign(selectedCampaign.id)}
+                    className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shrink-0 cursor-pointer shadow-md shadow-emerald-900/40"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Resume Campaign</span>
+                  </button>
+                </div>
+              )}
+
               {/* Campaign Status Card */}
               <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-5 backdrop-blur-sm space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -230,6 +524,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
                   {/* Scheduler Control Actions */}
                   <div className="flex items-center flex-wrap gap-2">
+                    {/* Pause / Resume */}
                     {selectedCampaign.status === 'running' ? (
                       <button
                         onClick={() => onPauseCampaign(selectedCampaign.id)}
@@ -248,6 +543,49 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                       </button>
                     )}
 
+                    {/* Edit Campaign Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditModal(selectedCampaign)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-mono font-semibold transition-all cursor-pointer"
+                      title="Edit campaign settings, target URL, metrics, pacing, and curve"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Edit</span>
+                    </button>
+
+                    {/* Clone Campaign Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleClone(selectedCampaign.id)}
+                      disabled={cloningId === selectedCampaign.id}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50"
+                      title="Clone entire campaign with refreshed pacing schedule"
+                    >
+                      {cloningId === selectedCampaign.id ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5 text-indigo-400" />
+                      )}
+                      <span>Clone</span>
+                    </button>
+
+                    {/* Auto-Pause Outage Circuit Breaker Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => handleToggleAutoPause(selectedCampaign)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono font-semibold transition-all cursor-pointer ${
+                        selectedCampaign.autoPauseOnServiceFailure !== false
+                          ? 'bg-purple-950/50 hover:bg-purple-900/60 text-purple-300 border-purple-500/40 shadow-sm'
+                          : 'bg-slate-800/80 hover:bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                      title="Auto-pause circuit breaker: automatically pauses when any SMM service fails"
+                    >
+                      <ShieldAlert className={`w-3.5 h-3.5 ${selectedCampaign.autoPauseOnServiceFailure !== false ? 'text-purple-400' : 'text-slate-500'}`} />
+                      <span>Auto-Pause: {selectedCampaign.autoPauseOnServiceFailure !== false ? 'ON' : 'OFF'}</span>
+                    </button>
+
+                    {/* Trigger Next Batch */}
                     <button
                       onClick={() => onFastForwardBatch(selectedCampaign.id)}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white text-xs font-mono font-semibold shadow-sm transition-all cursor-pointer"
@@ -584,6 +922,414 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Edit Campaign Modal */}
+      {editModalCampaign && editForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl my-8 space-y-5 text-slate-100 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Edit Campaign Configuration
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
+                      {editModalCampaign.id}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Change target URL, volume metrics, duration, cadence gaps, or curve with automated batch rebalancing.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditModalCampaign(null);
+                  setEditForm(null);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <div className="space-y-4">
+              {/* Target & Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
+                    Campaign Name
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.name}
+                    onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500 transition-colors"
+                    placeholder="e.g. Viral Reel Growth Push"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
+                    Creator Handle
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.handle}
+                    onChange={e => setEditForm({ ...editForm, handle: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500 transition-colors"
+                    placeholder="@username"
+                  />
+                </div>
+              </div>
+
+              {/* Target URL */}
+              <div>
+                <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
+                  Target Post / Reel URL
+                </label>
+                <div className="relative">
+                  <Globe className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="url"
+                    value={editForm.targetUrl}
+                    onChange={e => {
+                      const newUrl = e.target.value;
+                      const parsed = parseTargetUrl(newUrl, editModalCampaign.platform);
+                      setEditForm({
+                        ...editForm,
+                        targetUrl: newUrl,
+                        handle: parsed.handle && editForm.handle.startsWith('@creator_') ? parsed.handle : editForm.handle
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500 transition-colors"
+                    placeholder="https://www.instagram.com/reel/..."
+                  />
+                </div>
+              </div>
+
+              {/* Circuit Breaker Auto-Pause on Outage Card */}
+              <div className="flex items-center justify-between p-3.5 rounded-xl border border-amber-500/30 bg-amber-950/20">
+                <div className="flex items-start gap-3 pr-2">
+                  <ShieldAlert className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-white flex items-center gap-2">
+                      Auto-Pause Campaign if Any Service Is Unavailable
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">
+                        Circuit Breaker
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                      Automatically halts the campaign immediately if ReliableSMM or JAP returns an API error, insufficient balance, or maintenance response to prevent dropped orders.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditForm({ ...editForm, autoPauseOnServiceFailure: !editForm.autoPauseOnServiceFailure })}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    editForm.autoPauseOnServiceFailure ? 'bg-amber-500' : 'bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      editForm.autoPauseOnServiceFailure ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Engagement Volume */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-mono font-medium text-slate-300 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Target Engagement Volume</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const golden = computeGoldenRatioMetrics(editForm.views);
+                      setEditForm({
+                        ...editForm,
+                        likes: golden.likes,
+                        comments: golden.comments,
+                        shares: golden.shares,
+                        saves: golden.saves,
+                        reposts: golden.reposts
+                      });
+                    }}
+                    className="flex items-center gap-1 text-[11px] font-mono text-purple-400 hover:text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded-lg border border-purple-500/20 hover:border-purple-500/40 transition-all cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Auto-Calculate Ratios (Golden Ratio)</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 font-mono text-xs">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Eye className="w-3 h-3 text-cyan-400" /> Views</span>
+                      <span className="text-[9px] text-cyan-400 font-bold">Min 100</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="100"
+                      step="50"
+                      value={editForm.views}
+                      onChange={e => setEditForm({ ...editForm, views: Math.max(100, Number(e.target.value) || 100) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-cyan-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Heart className="w-3 h-3 text-pink-400" /> Likes</span>
+                      <span className="text-[9px] text-slate-400">Min 5</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="5"
+                      step="5"
+                      value={editForm.likes}
+                      onChange={e => setEditForm({ ...editForm, likes: Math.max(5, Number(e.target.value) || 5) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-pink-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-emerald-400" /> Comments</span>
+                      <span className="text-[9px] text-slate-400">0+</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={editForm.comments}
+                      onChange={e => setEditForm({ ...editForm, comments: Math.max(0, Number(e.target.value) || 0) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Share2 className="w-3 h-3 text-emerald-400" /> Shares</span>
+                      <span className="text-[9px] text-emerald-400 font-bold">Min 10</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="10"
+                      step="5"
+                      value={editForm.shares}
+                      onChange={e => setEditForm({ ...editForm, shares: Math.max(10, Number(e.target.value) || 10) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Bookmark className="w-3 h-3 text-amber-400" /> Saves</span>
+                      <span className="text-[9px] text-slate-400">Min 1</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      step="5"
+                      value={editForm.saves}
+                      onChange={e => setEditForm({ ...editForm, saves: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-amber-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><RefreshCw className="w-3 h-3 text-indigo-400" /> Reposts</span>
+                      <span className="text-[9px] text-slate-400">Min 1</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      step="2"
+                      value={editForm.reposts}
+                      onChange={e => setEditForm({ ...editForm, reposts: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-indigo-400 pb-0.5"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Cadence Gap Range & Duration */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-mono font-medium text-slate-300 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Cadence Interval & Dynamic Random Gap</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-indigo-400 font-bold">
+                    Random {editForm.minMins}–{editForm.maxMins}m per batch
+                  </div>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: '20–35m', min: 20, max: 35 },
+                    { label: '25m', min: 20, max: 30 },
+                    { label: '35m', min: 25, max: 45 },
+                    { label: '45m', min: 35, max: 55 },
+                    { label: '60m', min: 45, max: 65 },
+                    { label: '25–60m (Wide)', min: 25, max: 60 },
+                  ].map(p => {
+                    const active = editForm.minMins === p.min && editForm.maxMins === p.max;
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, minMins: p.min, maxMins: p.max })}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer border ${
+                          active
+                            ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Duration & Custom Range */}
+                <div className="grid grid-cols-3 gap-2.5 pt-1 text-xs font-mono">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Duration (Hours)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={editForm.durationHours}
+                      onChange={e => setEditForm({ ...editForm, durationHours: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Min Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="120"
+                      value={editForm.minMins}
+                      onChange={e => setEditForm({ ...editForm, minMins: Math.max(5, Number(e.target.value) || 5) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Max Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min={editForm.minMins}
+                      max="180"
+                      value={editForm.maxMins}
+                      onChange={e => setEditForm({ ...editForm, maxMins: Math.max(editForm.minMins, Number(e.target.value) || editForm.minMins) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Algorithmic Curve */}
+              <div>
+                <label className="block text-xs font-mono font-medium text-slate-300 mb-1.5">
+                  Algorithmic Curve
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
+                  {[
+                    { id: 'trending_rocket', label: 'Trending Rocket', icon: '🚀' },
+                    { id: 'steady_climb', label: 'Steady Climb', icon: '📈' },
+                    { id: 'explore_push', label: 'Explore Push', icon: '🔥' },
+                    { id: 'fyp_waves', label: 'FYP Waves', icon: '🌊' },
+                    { id: 'circadian', label: 'Circadian Sleep/Wake', icon: '🌙' },
+                    { id: 'evergreen', label: 'Evergreen Slow-Burn', icon: '⏳' },
+                  ].map(c => {
+                    const isSelected = editForm.curve === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, curve: c.id as AlgorithmicCurve })}
+                        className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-950/60 border-purple-500/50 text-white shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-sm">{c.icon}</span>
+                        <span className="truncate text-[11px] font-bold">{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Smart Rebalance Toggle */}
+              <div className="flex items-start gap-2.5 p-3 rounded-xl border border-purple-500/30 bg-purple-950/20 font-mono">
+                <input
+                  type="checkbox"
+                  id="rebalanceToggle"
+                  checked={editForm.rebalancePendingBatches}
+                  onChange={e => setEditForm({ ...editForm, rebalancePendingBatches: e.target.checked })}
+                  className="mt-0.5 rounded border-slate-700 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                />
+                <label htmlFor="rebalanceToggle" className="text-xs cursor-pointer select-none">
+                  <div className="font-bold text-white flex items-center gap-1.5">
+                    <span>Smart Rebalance Remaining Batches (Recommended)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    Preserves already dispatched/completed batches, subtracts delivered volume, and smoothly re-distributes only the remaining metrics across newly timed batches starting now.
+                  </p>
+                </label>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditModalCampaign(null);
+                  setEditForm(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingEdit}
+                onClick={handleSaveEdit}
+                className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-purple-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isSavingEdit ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving Changes...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save & Update Campaign</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
