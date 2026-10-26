@@ -60,7 +60,7 @@ export default function App() {
     return [];
   });
 
-  // Sync panels & campaigns from server
+  // Sync panels & campaigns from server (with non-destructive anti-wipe merge from browser cache)
   useEffect(() => {
     const loadServerData = async () => {
       try {
@@ -74,40 +74,110 @@ export default function App() {
       } catch (e) {}
 
       try {
+        // Read client cache first
+        let cachedCampaigns: Campaign[] = [];
+        try {
+          const saved = localStorage.getItem('smm_campaigns_cache');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) cachedCampaigns = parsed;
+          }
+        } catch (e) {}
+
         const res = await fetch('/api/campaigns');
         if (res.ok) {
           const data = await res.json();
-          if (data.campaigns && Array.isArray(data.campaigns)) {
-            setCampaigns(data.campaigns);
+          const serverCampaigns: Campaign[] = Array.isArray(data.campaigns) ? data.campaigns : [];
+
+          // Non-destructive Union Merge: Never drop campaigns that exist in client or server
+          const campaignMap = new Map<string, Campaign>();
+          
+          // Seed with cached campaigns
+          cachedCampaigns.forEach(c => {
+            if (c && c.id) campaignMap.set(c.id, c);
+          });
+
+          // Merge with server campaigns
+          serverCampaigns.forEach(s => {
+            if (s && s.id) {
+              const existing = campaignMap.get(s.id);
+              if (!existing) {
+                campaignMap.set(s.id, s);
+              } else {
+                // If server has more recent dispatch or identical, prefer server
+                const sSuccess = s.batches?.filter(b => b.status === 'success').length || 0;
+                const eSuccess = existing.batches?.filter(b => b.status === 'success').length || 0;
+                if (sSuccess >= eSuccess) {
+                  campaignMap.set(s.id, s);
+                }
+              }
+            }
+          });
+
+          const mergedCampaigns = Array.from(campaignMap.values());
+          if (mergedCampaigns.length > 0) {
+            setCampaigns(mergedCampaigns);
+            try {
+              localStorage.setItem('smm_campaigns_cache', JSON.stringify(mergedCampaigns));
+            } catch (e) {}
+
+            // Persist the full merged set to server files immediately
+            fetch('/api/campaigns/sync-cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clientCampaigns: mergedCampaigns })
+            }).catch(() => {});
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn('Initial server data sync note:', e);
+      }
     };
 
     loadServerData();
   }, []);
 
-  // 24/7 background sync: Pull real server state (live SMM panel order IDs, delivery status, real logs)
+  // 24/7 background sync: Pull server state while preserving all client campaigns
   useEffect(() => {
     const syncWorker = setInterval(async () => {
       try {
         const res = await fetch('/api/campaigns');
         if (res.ok) {
           const data = await res.json();
-          if (data.campaigns && Array.isArray(data.campaigns)) {
-            setCampaigns(data.campaigns);
+          if (data.campaigns && Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+            setCampaigns(prev => {
+              const map = new Map<string, Campaign>();
+              // Keep all existing client campaigns
+              prev.forEach(c => { if (c && c.id) map.set(c.id, c); });
+              // Update with server dispatches
+              data.campaigns.forEach((sc: Campaign) => {
+                if (sc && sc.id) map.set(sc.id, sc);
+              });
+              const updated = Array.from(map.values());
+              try {
+                localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated));
+              } catch (e) {}
+              return updated;
+            });
           }
         }
       } catch (e) {}
-    }, 5000);
+    }, 6000);
 
     return () => clearInterval(syncWorker);
   }, []);
 
-  // Save campaigns to localStorage whenever updated
+  // Save campaigns to localStorage whenever changed & sync to server disk
   useEffect(() => {
     try {
-      localStorage.setItem('smm_campaigns_cache', JSON.stringify(campaigns));
+      if (campaigns.length > 0) {
+        localStorage.setItem('smm_campaigns_cache', JSON.stringify(campaigns));
+        fetch('/api/campaigns/sync-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientCampaigns: campaigns })
+        }).catch(() => {});
+      }
     } catch (e) {}
   }, [campaigns]);
 
@@ -212,10 +282,14 @@ export default function App() {
     }
   };
 
-  // Clone campaign: Clone on server and prepend to list
-  const handleCloneCampaign = async (campaignId: string) => {
+  // Clone campaign: Clone on server with optional custom payload and prepend to list
+  const handleCloneCampaign = async (campaignId: string, customPayload?: any) => {
     try {
-      const res = await fetch(`/api/campaigns/${campaignId}/clone`, { method: 'POST' });
+      const res = await fetch(`/api/campaigns/${campaignId}/clone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customPayload || {})
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.campaign) {
@@ -224,10 +298,12 @@ export default function App() {
             try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
             return updated;
           });
+          return data.campaign;
         }
       }
     } catch (e) {
       console.error('Failed to clone campaign', e);
+      throw e;
     }
   };
 

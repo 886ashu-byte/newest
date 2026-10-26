@@ -79,14 +79,33 @@ let panels: any[] = [
 let campaigns: any[] = [];
 let dispatchLogs: any[] = [];
 
-// Lightweight persistence for active campaigns and panels across server reboots / cold starts
+// Dual-file resilient persistence for active campaigns and panels across server reboots, git updates, and cold starts
 const DATA_FILE = path.resolve(__dirname, '.data', 'smm_store.json');
+const BACKUP_FILE = path.resolve(__dirname, 'campaigns_backup.json');
+
 function loadPersistedData() {
   try {
+    let loaded = false;
+    // Try primary store first
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       const data = JSON.parse(raw);
-      if (Array.isArray(data.campaigns) && data.campaigns.length > 0) campaigns = data.campaigns;
+      if (Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+        campaigns = data.campaigns;
+        loaded = true;
+      }
+      if (Array.isArray(data.panels) && data.panels.length > 0) panels = data.panels;
+      if (Array.isArray(data.dispatchLogs) && data.dispatchLogs.length > 0) dispatchLogs = data.dispatchLogs;
+    }
+
+    // If primary empty or missing, try root backup store
+    if (!loaded && fs.existsSync(BACKUP_FILE)) {
+      const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+        campaigns = data.campaigns;
+        console.log(`[Persistence] Loaded ${campaigns.length} campaigns from root backup store.`);
+      }
       if (Array.isArray(data.panels) && data.panels.length > 0) panels = data.panels;
       if (Array.isArray(data.dispatchLogs) && data.dispatchLogs.length > 0) dispatchLogs = data.dispatchLogs;
     }
@@ -97,10 +116,16 @@ function loadPersistedData() {
 
 function persistData() {
   try {
+    const payload = JSON.stringify({ campaigns, panels, dispatchLogs }, null, 2);
+    // Write primary file
     const dir = path.dirname(DATA_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ campaigns, panels, dispatchLogs }, null, 2));
-  } catch (e) {}
+    fs.writeFileSync(DATA_FILE, payload);
+    // Write backup file for redeploy persistence
+    fs.writeFileSync(BACKUP_FILE, payload);
+  } catch (e) {
+    console.warn('Failed to persist data:', e);
+  }
 }
 
 loadPersistedData();
@@ -278,6 +303,77 @@ app.get('/api/campaigns', (req: Request, res: Response) => {
   res.json({ campaigns });
 });
 
+// CAMPAIGNS: Cache synchronization & permanent server persistence
+app.post('/api/campaigns/sync-cache', (req: Request, res: Response) => {
+  const { clientCampaigns } = req.body;
+  if (Array.isArray(clientCampaigns) && clientCampaigns.length > 0) {
+    let updatedCount = 0;
+    for (const clientCamp of clientCampaigns) {
+      if (!clientCamp || !clientCamp.id) continue;
+      const existingIdx = campaigns.findIndex(c => c.id === clientCamp.id);
+      if (existingIdx >= 0) {
+        // Merge updates
+        campaigns[existingIdx] = { ...campaigns[existingIdx], ...clientCamp };
+        updatedCount++;
+      } else {
+        campaigns.push(clientCamp);
+        updatedCount++;
+      }
+    }
+    if (updatedCount > 0) {
+      persistData();
+      console.log(`[Cache Sync] Synchronized and saved ${campaigns.length} campaigns to permanent server storage.`);
+    }
+  }
+  res.json({ success: true, count: campaigns.length, campaigns });
+});
+
+// CAMPAIGNS: Explicit Save-All to permanent server files (written to disk immediately)
+app.post('/api/campaigns/save-all', (req: Request, res: Response) => {
+  const { campaigns: clientCampaigns } = req.body;
+  if (Array.isArray(clientCampaigns) && clientCampaigns.length > 0) {
+    for (const c of clientCampaigns) {
+      if (!c || !c.id) continue;
+      const idx = campaigns.findIndex(item => item.id === c.id);
+      if (idx >= 0) {
+        campaigns[idx] = { ...campaigns[idx], ...c };
+      } else {
+        campaigns.push(c);
+      }
+    }
+    persistData();
+  } else if (campaigns.length > 0) {
+    persistData();
+  }
+  res.json({
+    success: true,
+    count: campaigns.length,
+    message: `All ${campaigns.length} campaigns permanently saved to server files (campaigns_backup.json and .data/smm_store.json).`,
+    backupFile: BACKUP_FILE
+  });
+});
+
+// CAMPAIGNS: Storage Status & Persistence Check
+app.get('/api/campaigns/storage-status', (req: Request, res: Response) => {
+  const primaryExists = fs.existsSync(DATA_FILE);
+  const backupExists = fs.existsSync(BACKUP_FILE);
+  let backupFileCampaigns = 0;
+  try {
+    if (backupExists) {
+      const parsed = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf-8'));
+      if (Array.isArray(parsed.campaigns)) backupFileCampaigns = parsed.campaigns.length;
+    }
+  } catch (e) {}
+
+  res.json({
+    serverActiveCount: campaigns.length,
+    backupFileCount: backupFileCampaigns,
+    primaryStoreExists: primaryExists,
+    backupStoreExists: backupExists,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Real SMM v2 Gateway Client (PerfectPanel / SmartPanel API v2 compatible)
 async function callSmmApi(apiUrl: string, apiKey: string, action: string, extraParams: Record<string, any> = {}): Promise<any> {
   const bodyParams = new URLSearchParams({
@@ -356,6 +452,112 @@ function cancelCampaignTimers(campaignId: string) {
   }
 }
 
+// CAMPAIGNS: Bulk Pause
+app.post('/api/campaigns/bulk/pause', (req: Request, res: Response) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'IDs array is required' });
+  }
+  let count = 0;
+  for (const id of ids) {
+    const c = campaigns.find(item => item.id === id);
+    if (c && c.status === 'running') {
+      c.status = 'paused';
+      cancelCampaignTimers(id);
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Paused ${count} campaigns.` });
+});
+
+// CAMPAIGNS: Bulk Resume
+app.post('/api/campaigns/bulk/resume', (req: Request, res: Response) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'IDs array is required' });
+  }
+  let count = 0;
+  for (const id of ids) {
+    const c = campaigns.find(item => item.id === id);
+    if (c && c.status === 'paused') {
+      c.status = 'running';
+      if (c.lastAutoPause) c.lastAutoPause = undefined;
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Resumed ${count} campaigns.` });
+});
+
+// CAMPAIGNS: Bulk Delete
+app.post('/api/campaigns/bulk/delete', (req: Request, res: Response) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'IDs array is required' });
+  }
+  const idSet = new Set(ids);
+  for (const id of ids) {
+    cancelCampaignTimers(id);
+  }
+  const prevCount = campaigns.length;
+  campaigns = campaigns.filter(c => !idSet.has(c.id));
+  const deletedCount = prevCount - campaigns.length;
+  persistData();
+  res.json({ success: true, deletedCount, campaigns, message: `Deleted ${deletedCount} campaigns.` });
+});
+
+// CAMPAIGNS: Bulk Dispatch Next Batch
+app.post('/api/campaigns/bulk/dispatch-next', async (req: Request, res: Response) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'IDs array is required' });
+  }
+  let count = 0;
+  for (const id of ids) {
+    const c = campaigns.find(item => item.id === id);
+    if (c) {
+      const nextPending = c.batches.find((b: any) => b.status === 'pending');
+      if (nextPending) {
+        await executeBatch(c, nextPending, true);
+        count++;
+      }
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Dispatched next batch for ${count} campaigns.` });
+});
+
+// CAMPAIGNS: Bulk Update / Edit
+app.post('/api/campaigns/bulk/update', (req: Request, res: Response) => {
+  const { ids, updates } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0 || !updates) {
+    return res.status(400).json({ error: 'IDs and updates are required' });
+  }
+  let count = 0;
+  for (const id of ids) {
+    const c = campaigns.find(item => item.id === id);
+    if (c) {
+      if (updates.autoPauseOnServiceFailure !== undefined) {
+        c.autoPauseOnServiceFailure = updates.autoPauseOnServiceFailure;
+      }
+      if (updates.curve !== undefined) {
+        c.curve = updates.curve;
+      }
+      if (updates.cadenceRange !== undefined) {
+        c.cadenceRange = updates.cadenceRange;
+      }
+      if (updates.durationHours !== undefined) {
+        c.durationHours = updates.durationHours;
+      }
+      c.updatedAt = new Date().toISOString();
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Updated ${count} campaigns.` });
+});
+
 // CAMPAIGNS: Pause
 app.post('/api/campaigns/:id/pause', (req: Request, res: Response) => {
   const { id } = req.params;
@@ -424,43 +626,54 @@ app.put('/api/campaigns/:id', (req: Request, res: Response) => {
   res.json({ success: true, campaign, message: 'Campaign updated successfully' });
 });
 
-// CAMPAIGNS: Clone existing campaign
+// CAMPAIGNS: Clone existing campaign (supports optional configuration overrides for URL, name, metrics, etc.)
 app.post('/api/campaigns/:id/clone', async (req: Request, res: Response) => {
   const { id } = req.params;
   const original = campaigns.find(c => c.id === id);
   if (!original) return res.status(404).json({ error: 'Source campaign not found' });
 
+  const overrides = req.body || {};
   const cloneId = 'camp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
   const now = Date.now();
 
-  // Clone batches with refreshed timestamps and pending status
-  let cumulativeMs = now;
-  const clonedBatches = (original.batches || []).map((b: any, idx: number) => {
-    const gapMs = idx === 0 ? 0 : (b.gapMinutes ? Math.round(b.gapMinutes * 60 * 1000) : 25 * 60 * 1000);
-    cumulativeMs += gapMs;
-    return {
-      ...b,
-      batchIndex: idx,
-      scheduledAt: new Date(cumulativeMs).toISOString(),
-      status: 'pending',
-      dispatchedAt: undefined,
-      orderIds: {},
-      error: undefined,
-      executionLogs: []
-    };
-  });
+  let clonedBatches = overrides.batches;
+  if (!clonedBatches || !Array.isArray(clonedBatches) || clonedBatches.length === 0) {
+    let cumulativeMs = now;
+    clonedBatches = (original.batches || []).map((b: any, idx: number) => {
+      const gapMs = idx === 0 ? 0 : (b.gapMinutes ? Math.round(b.gapMinutes * 60 * 1000) : 25 * 60 * 1000);
+      cumulativeMs += gapMs;
+      return {
+        ...b,
+        batchIndex: idx,
+        scheduledAt: new Date(cumulativeMs).toISOString(),
+        status: 'pending',
+        dispatchedAt: undefined,
+        orderIds: {},
+        error: undefined,
+        executionLogs: []
+      };
+    });
+  }
 
   const clonedCampaign = {
     ...JSON.parse(JSON.stringify(original)),
     id: cloneId,
-    name: `${original.name} (Copy)`,
+    name: overrides.name?.trim() || `${original.name} (Copy)`,
+    targetUrl: overrides.targetUrl?.trim() || original.targetUrl,
+    handle: overrides.handle?.trim() || original.handle,
     status: 'running',
     createdAt: new Date().toISOString(),
     startedAt: new Date().toISOString(),
     completedAt: undefined,
     currentBatchIndex: 0,
+    metrics: overrides.metrics || original.metrics,
+    durationHours: overrides.durationHours || original.durationHours,
+    curve: overrides.curve || original.curve,
+    cadenceRange: overrides.cadenceRange || original.cadenceRange,
+    autoPauseOnServiceFailure: overrides.autoPauseOnServiceFailure !== undefined 
+      ? overrides.autoPauseOnServiceFailure 
+      : (original.autoPauseOnServiceFailure !== false),
     batches: clonedBatches,
-    autoPauseOnServiceFailure: original.autoPauseOnServiceFailure !== false,
     lastAutoPause: undefined
   };
 
@@ -473,11 +686,11 @@ app.post('/api/campaigns/:id/clone', async (req: Request, res: Response) => {
     await executeBatch(clonedCampaign, firstBatch, true);
   }
 
-  console.log(`[Campaign Cloned] New: "${clonedCampaign.name}" (${cloneId}) from (${id})`);
+  console.log(`[Campaign Cloned & Configured] New: "${clonedCampaign.name}" (${cloneId}) Target: ${clonedCampaign.targetUrl}`);
   res.status(201).json({
     success: true,
     campaign: clonedCampaign,
-    message: `Campaign cloned successfully as "${clonedCampaign.name}"`
+    message: `Campaign cloned and launched successfully as "${clonedCampaign.name}"`
   });
 });
 
@@ -721,7 +934,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     const subTime = new Date().toLocaleTimeString();
     if (batch.likes > 0 && !batch.orderIds.likes) {
       if (batch.likes < 10) {
-        // Micro-Likes (5 to 9 likes) -> JAP (#1778, starts at min 5)
+        // Micro-Likes (5 to 9 likes) -> Try JAP (#1778, starts at min 5)
         const microQty = Math.max(5, Math.min(9, Math.round(batch.likes)));
         const likesRes = await callSmmApi(japPanel.apiUrl, japPanel.apiKey, 'add', {
           service: 1778,
@@ -729,29 +942,78 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
           quantity: microQty
         });
         batch.likesProvider = 'JAP_Micro';
+
         if (likesRes && likesRes.order) {
           batch.orderIds.likes = String(likesRes.order);
           batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: LIVE order placed on JAP (#1778). Order ID: #${likesRes.order}`);
+          dispatchLogs.push({
+            id: 'log_' + Date.now() + '_likes_jap',
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            batchIndex: batch.batchIndex,
+            timestamp: new Date().toISOString(),
+            providerName: 'Just Another Panel (JAP)',
+            serviceId: 1778,
+            metricType: 'micro-likes',
+            quantity: microQty,
+            status: 'success',
+            orderId: String(likesRes.order),
+            responsePayload: likesRes
+          });
         } else {
+          // JAP error: DO NOT PAUSE CAMPAIGN. Fall back to ReliableSMM Macro-Likes (#7147)
           const errorMsg = likesRes?.error || 'Failed';
-          batch.orderIds.likes = `ERR: ${errorMsg}`;
-          batch.executionLogs.push(`[${subTime}] [T+5m] Micro-Likes: JAP response: "${errorMsg}" (Qty: ${microQty})`);
-          checkAndTriggerAutoPause(campaign, batch, 'Just Another Panel (JAP)', 1778, errorMsg);
+          batch.executionLogs.push(`[${subTime}] [T+5m] JAP Micro-Likes error: "${errorMsg}" (Qty: ${microQty}). Auto-pause BYPASSED for likes.`);
+
+          // ReliableSMM requires min 10+, so allocate between 10 to 15 likes as requested
+          const fallbackQty = Math.floor(10 + Math.random() * 6); // Random integer 10-15
+          batch.executionLogs.push(`[${subTime}] [T+5m] [Auto-Fallback] Routing likes to ReliableSMM (#7147) with ${fallbackQty} likes (min 10-15 required). Campaign continues without pause.`);
+
+          const fallbackRes = await callSmmApi(reliablePanel.apiUrl, reliablePanel.apiKey, 'add', {
+            service: 7147,
+            link: targetLink,
+            quantity: fallbackQty
+          });
+
+          if (fallbackRes && fallbackRes.order) {
+            batch.orderIds.likes = String(fallbackRes.order);
+            batch.likesProvider = 'ReliableSMM_Fallback';
+            batch.likes = fallbackQty;
+            batch.executionLogs.push(`[${subTime}] [T+5m] [Auto-Fallback SUCCESS] LIVE likes order placed on ReliableSMM (#7147). Order ID: #${fallbackRes.order} (${fallbackQty} likes). Next batch will dispatch on schedule.`);
+            dispatchLogs.push({
+              id: 'log_' + Date.now() + '_likes_fallback',
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              batchIndex: batch.batchIndex,
+              timestamp: new Date().toISOString(),
+              providerName: 'ReliableSMM (Fallback from JAP)',
+              serviceId: 7147,
+              metricType: 'macro-likes',
+              quantity: fallbackQty,
+              status: 'success',
+              orderId: String(fallbackRes.order),
+              responsePayload: fallbackRes
+            });
+          } else {
+            const fallbackErrMsg = fallbackRes?.error || 'Fallback error';
+            batch.orderIds.likes = `ERR: JAP (${errorMsg}) & ReliableSMM (${fallbackErrMsg})`;
+            batch.executionLogs.push(`[${subTime}] [T+5m] [Fallback Warning] ReliableSMM fallback returned: "${fallbackErrMsg}". Campaign NOT paused — moving to next batch as scheduled.`);
+            dispatchLogs.push({
+              id: 'log_' + Date.now() + '_likes_fallback_err',
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              batchIndex: batch.batchIndex,
+              timestamp: new Date().toISOString(),
+              providerName: 'ReliableSMM (Fallback)',
+              serviceId: 7147,
+              metricType: 'macro-likes',
+              quantity: fallbackQty,
+              status: 'failed',
+              error: fallbackErrMsg,
+              responsePayload: fallbackRes
+            });
+          }
         }
-        dispatchLogs.push({
-          id: 'log_' + Date.now() + '_likes_jap',
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          batchIndex: batch.batchIndex,
-          timestamp: new Date().toISOString(),
-          providerName: 'Just Another Panel (JAP)',
-          serviceId: 1778,
-          metricType: 'micro-likes',
-          quantity: microQty,
-          status: likesRes?.order ? 'success' : 'failed',
-          orderId: likesRes?.order ? String(likesRes.order) : undefined,
-          responsePayload: likesRes
-        });
       } else {
         // Macro-Likes (10+ likes) -> ReliableSMM (#7147, starts at min 10)
         const macroQty = Math.max(10, Math.round(batch.likes));
@@ -764,26 +1026,40 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         if (likesRes && likesRes.order) {
           batch.orderIds.likes = String(likesRes.order);
           batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: LIVE order placed on ReliableSMM (#7147). Order ID: #${likesRes.order}`);
+          dispatchLogs.push({
+            id: 'log_' + Date.now() + '_likes_rel',
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            batchIndex: batch.batchIndex,
+            timestamp: new Date().toISOString(),
+            providerName: 'ReliableSMM',
+            serviceId: 7147,
+            metricType: 'macro-likes',
+            quantity: macroQty,
+            status: 'success',
+            orderId: String(likesRes.order),
+            responsePayload: likesRes
+          });
         } else {
+          // Macro-likes error: log error but DO NOT pause the campaign so next batch proceeds
           const errorMsg = likesRes?.error || 'Failed';
           batch.orderIds.likes = `ERR: ${errorMsg}`;
-          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: ReliableSMM response: "${errorMsg}" (Qty: ${macroQty})`);
-          checkAndTriggerAutoPause(campaign, batch, 'ReliableSMM', 7147, errorMsg);
+          batch.executionLogs.push(`[${subTime}] [T+10m] Macro-Likes: ReliableSMM response: "${errorMsg}" (Qty: ${macroQty}). Campaign NOT paused for likes — continuing to next batch.`);
+          dispatchLogs.push({
+            id: 'log_' + Date.now() + '_likes_rel_err',
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            batchIndex: batch.batchIndex,
+            timestamp: new Date().toISOString(),
+            providerName: 'ReliableSMM',
+            serviceId: 7147,
+            metricType: 'macro-likes',
+            quantity: macroQty,
+            status: 'failed',
+            error: errorMsg,
+            responsePayload: likesRes
+          });
         }
-        dispatchLogs.push({
-          id: 'log_' + Date.now() + '_likes_rel',
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          batchIndex: batch.batchIndex,
-          timestamp: new Date().toISOString(),
-          providerName: 'ReliableSMM',
-          serviceId: 7147,
-          metricType: 'macro-likes',
-          quantity: macroQty,
-          status: likesRes?.order ? 'success' : 'failed',
-          orderId: likesRes?.order ? String(likesRes.order) : undefined,
-          responsePayload: likesRes
-        });
       }
     }
     persistData();

@@ -32,7 +32,15 @@ import {
   Rocket,
   TrendingUp,
   Flame,
-  ShieldCheck
+  ShieldCheck,
+  CheckSquare,
+  Square,
+  Filter,
+  Search,
+  Download,
+  Upload,
+  ArrowUpDown,
+  SlidersHorizontal
 } from 'lucide-react';
 import { Campaign, ScheduledBatch, AlgorithmicCurve } from '../types';
 import { generateCampaignBatches, parseTargetUrl, computeGoldenRatioMetrics } from '../utils/algorithmicEngine';
@@ -46,7 +54,7 @@ interface ActiveSchedulerProps {
   onDeleteCampaign: (campaignId: string) => void;
   onSelectCampaignForWizard?: (campaign: Campaign) => void;
   onEditCampaign?: (campaign: Campaign) => Promise<void>;
-  onCloneCampaign?: (campaignId: string) => Promise<void>;
+  onCloneCampaign?: (campaignId: string, customPayload?: any) => Promise<any>;
 }
 
 export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
@@ -89,6 +97,52 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   } | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
+  // Clone with Customize Modal State
+  const [cloneModalCampaign, setCloneModalCampaign] = useState<Campaign | null>(null);
+  const [cloneForm, setCloneForm] = useState<{
+    sourceId: string;
+    name: string;
+    targetUrl: string;
+    handle: string;
+    autoPauseOnServiceFailure: boolean;
+    views: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    saves: number;
+    reposts: number;
+    durationHours: number;
+    minMins: number;
+    maxMins: number;
+    curve: AlgorithmicCurve;
+  } | null>(null);
+  const [isSubmittingClone, setIsSubmittingClone] = useState(false);
+
+  // Advanced Multiple Selection & Fleet Management
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'paused' | 'auto_paused' | 'completed'>('all');
+  const [sortBy, setSortBy] = useState<'recent' | 'progress' | 'name' | 'batches'>('recent');
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+  const [isBulkLoading, setIsBulkLoading] = useState(false);
+  const [bulkEditForm, setBulkEditForm] = useState<{
+    autoPauseOnServiceFailure?: boolean;
+    curve?: AlgorithmicCurve;
+    minMins: number;
+    maxMins: number;
+    durationHours?: number;
+    rebalancePendingBatches: boolean;
+  }>({
+    autoPauseOnServiceFailure: true,
+    curve: 'trending_rocket',
+    minMins: 20,
+    maxMins: 35,
+    rebalancePendingBatches: true
+  });
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [isSavingToServer, setIsSavingToServer] = useState(false);
+
   // Auto-dismiss toast
   useEffect(() => {
     if (toastMsg) {
@@ -97,31 +151,404 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     }
   }, [toastMsg]);
 
-  // Clone Campaign
-  const handleClone = async (campaignId: string) => {
-    setCloningId(campaignId);
+  // Open Clone & Configure Modal (user can change URL, name, metrics, etc.)
+  const handleOpenCloneModal = (campaign: Campaign) => {
+    setCloneModalCampaign(campaign);
+    setCloneForm({
+      sourceId: campaign.id,
+      name: `${campaign.name} (Copy)`,
+      targetUrl: campaign.targetUrl,
+      handle: campaign.handle,
+      autoPauseOnServiceFailure: campaign.autoPauseOnServiceFailure !== false,
+      views: campaign.metrics.views,
+      likes: campaign.metrics.likes,
+      comments: campaign.metrics.comments,
+      shares: campaign.metrics.shares,
+      saves: campaign.metrics.saves,
+      reposts: campaign.metrics.reposts,
+      durationHours: campaign.durationHours || 24,
+      minMins: campaign.cadenceRange?.minMins || 20,
+      maxMins: campaign.cadenceRange?.maxMins || 35,
+      curve: campaign.curve || 'trending_rocket'
+    });
+  };
+
+  // Confirm & Launch Cloned Campaign with fresh batches
+  const handleConfirmClone = async () => {
+    if (!cloneModalCampaign || !cloneForm) return;
+    setIsSubmittingClone(true);
+
     try {
+      const parsed = parseTargetUrl(cloneForm.targetUrl, cloneModalCampaign.platform);
+      const cleanHandle = cloneForm.handle.trim() || parsed.handle || cloneModalCampaign.handle;
+      const cleanTargetUrl = cloneForm.targetUrl.trim() || cloneModalCampaign.targetUrl;
+
+      const updatedMetrics = {
+        views: Math.max(100, Number(cloneForm.views) || 100),
+        likes: Math.max(5, Number(cloneForm.likes) || 5),
+        comments: Math.max(0, Number(cloneForm.comments) || 0),
+        shares: Math.max(10, Number(cloneForm.shares) || 10),
+        saves: Math.max(1, Number(cloneForm.saves) || 1),
+        reposts: Math.max(1, Number(cloneForm.reposts) || 1)
+      };
+
+      const newGeneratedBatches = generateCampaignBatches({
+        metrics: updatedMetrics,
+        durationHours: Math.max(1, cloneForm.durationHours),
+        intervalMinutes: Math.round((cloneForm.minMins + cloneForm.maxMins) / 2),
+        curve: cloneForm.curve,
+        jitterPercent: cloneModalCampaign.jitterPercent || 20,
+        seedChunkProtocol: cloneModalCampaign.seedChunkProtocol ?? true,
+        cadenceRange: { minMins: cloneForm.minMins, maxMins: cloneForm.maxMins },
+        startDate: new Date()
+      });
+
+      const clonePayload = {
+        name: cloneForm.name.trim() || `${cloneModalCampaign.name} (Copy)`,
+        targetUrl: cleanTargetUrl,
+        handle: cleanHandle,
+        autoPauseOnServiceFailure: cloneForm.autoPauseOnServiceFailure,
+        metrics: updatedMetrics,
+        durationHours: cloneForm.durationHours,
+        curve: cloneForm.curve,
+        cadenceRange: { minMins: cloneForm.minMins, maxMins: cloneForm.maxMins },
+        batches: newGeneratedBatches
+      };
+
+      let newCamp: any;
       if (onCloneCampaign) {
-        await onCloneCampaign(campaignId);
+        newCamp = await onCloneCampaign(cloneForm.sourceId, clonePayload);
       } else {
-        const res = await fetch(`/api/campaigns/${campaignId}/clone`, { method: 'POST' });
+        const res = await fetch(`/api/campaigns/${cloneForm.sourceId}/clone`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(clonePayload)
+        });
         if (!res.ok) {
           const err = await res.json();
           throw new Error(err.error || 'Failed to clone');
         }
         const data = await res.json();
-        if (data.campaign) {
-          setCampaigns(prev => [data.campaign, ...prev]);
-          setSelectedCampaignId(data.campaign.id);
+        newCamp = data.campaign;
+        if (newCamp) {
+          setCampaigns(prev => [newCamp, ...prev]);
         }
       }
-      setToastMsg({ text: 'Campaign cloned successfully with fresh scheduled batches!', type: 'success' });
+
+      if (newCamp && newCamp.id) {
+        setSelectedCampaignId(newCamp.id);
+      }
+      setToastMsg({ text: `Cloned campaign "${clonePayload.name}" created and launched!`, type: 'success' });
+      setCloneModalCampaign(null);
+      setCloneForm(null);
     } catch (e: any) {
       setToastMsg({ text: e.message || 'Failed to clone campaign', type: 'error' });
     } finally {
-      setCloningId(null);
+      setIsSubmittingClone(false);
     }
   };
+
+  // Toggle selection for bulk actions
+  const handleToggleSelectCampaign = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedCampaignIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  // Bulk Pause
+  const handleBulkPause = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    setIsBulkLoading(true);
+    try {
+      const res = await fetch('/api/campaigns/bulk/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedCampaignIds })
+      });
+      if (res.ok) {
+        setCampaigns(prev => prev.map(c => selectedCampaignIds.includes(c.id) ? { ...c, status: 'paused' } : c));
+        setToastMsg({ text: `Successfully paused ${selectedCampaignIds.length} campaigns.`, type: 'info' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to pause campaigns', type: 'error' });
+    } finally {
+      setIsBulkLoading(false);
+    }
+  };
+
+  // Bulk Resume
+  const handleBulkResume = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    setIsBulkLoading(true);
+    try {
+      const res = await fetch('/api/campaigns/bulk/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedCampaignIds })
+      });
+      if (res.ok) {
+        setCampaigns(prev => prev.map(c => selectedCampaignIds.includes(c.id) ? { ...c, status: 'running', lastAutoPause: undefined } : c));
+        setToastMsg({ text: `Successfully resumed ${selectedCampaignIds.length} campaigns.`, type: 'success' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to resume campaigns', type: 'error' });
+    } finally {
+      setIsBulkLoading(false);
+    }
+  };
+
+  // Bulk Dispatch Next Batch
+  const handleBulkDispatchNext = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    setIsBulkLoading(true);
+    try {
+      const res = await fetch('/api/campaigns/bulk/dispatch-next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedCampaignIds })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Triggered next batch dispatch for ${selectedCampaignIds.length} campaigns!`, type: 'success' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to dispatch next batches', type: 'error' });
+    } finally {
+      setIsBulkLoading(false);
+    }
+  };
+
+  // Bulk Delete Confirm
+  const handleBulkDeleteConfirm = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    setIsBulkLoading(true);
+    try {
+      const res = await fetch('/api/campaigns/bulk/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedCampaignIds })
+      });
+      if (res.ok) {
+        setCampaigns(prev => prev.filter(c => !selectedCampaignIds.includes(c.id)));
+        setToastMsg({ text: `Deleted ${selectedCampaignIds.length} campaigns.`, type: 'info' });
+        setSelectedCampaignIds([]);
+        setIsBulkDeleteConfirmOpen(false);
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to delete campaigns', type: 'error' });
+    } finally {
+      setIsBulkLoading(false);
+    }
+  };
+
+  // Apply Bulk Edit to all selected
+  const handleApplyBulkEdit = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    setIsBulkLoading(true);
+    try {
+      const updatedCampaignsList = campaigns.map(camp => {
+        if (!selectedCampaignIds.includes(camp.id)) return camp;
+
+        let newBatches = camp.batches;
+        if (bulkEditForm.rebalancePendingBatches) {
+          const doneBatches = camp.batches.filter(b => b.status === 'success' || b.status === 'running');
+          const doneViews = doneBatches.reduce((s, b) => s + b.views, 0);
+          const doneLikes = doneBatches.reduce((s, b) => s + b.likes, 0);
+          const doneComments = doneBatches.reduce((s, b) => s + b.comments, 0);
+          const doneShares = doneBatches.reduce((s, b) => s + b.shares, 0);
+          const doneSaves = doneBatches.reduce((s, b) => s + b.saves, 0);
+          const doneReposts = doneBatches.reduce((s, b) => s + b.reposts, 0);
+
+          const remMetrics = {
+            views: Math.max(100, camp.metrics.views - doneViews),
+            likes: Math.max(5, camp.metrics.likes - doneLikes),
+            comments: Math.max(0, camp.metrics.comments - doneComments),
+            shares: Math.max(10, camp.metrics.shares - doneShares),
+            saves: Math.max(1, camp.metrics.saves - doneSaves),
+            reposts: Math.max(1, camp.metrics.reposts - doneReposts)
+          };
+
+          const newGen = generateCampaignBatches({
+            metrics: remMetrics,
+            durationHours: Math.max(1, bulkEditForm.durationHours || camp.durationHours || 24),
+            intervalMinutes: Math.round((bulkEditForm.minMins + bulkEditForm.maxMins) / 2),
+            curve: bulkEditForm.curve || camp.curve,
+            jitterPercent: camp.jitterPercent || 20,
+            seedChunkProtocol: false,
+            cadenceRange: { minMins: bulkEditForm.minMins, maxMins: bulkEditForm.maxMins },
+            startDate: new Date()
+          });
+
+          const reindexed = newGen.map((b, idx) => ({
+            ...b,
+            batchIndex: doneBatches.length + idx,
+            isSeedBatch: false
+          }));
+          newBatches = [...doneBatches, ...reindexed];
+        }
+
+        return {
+          ...camp,
+          autoPauseOnServiceFailure: bulkEditForm.autoPauseOnServiceFailure !== false,
+          curve: bulkEditForm.curve || camp.curve,
+          cadenceRange: { minMins: bulkEditForm.minMins, maxMins: bulkEditForm.maxMins },
+          durationHours: bulkEditForm.durationHours || camp.durationHours,
+          batches: newBatches,
+          updatedAt: new Date().toISOString()
+        };
+      });
+
+      for (const camp of updatedCampaignsList.filter(c => selectedCampaignIds.includes(c.id))) {
+        await fetch(`/api/campaigns/${camp.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(camp)
+        }).catch(() => {});
+      }
+
+      setCampaigns(updatedCampaignsList);
+      setToastMsg({ text: `Bulk updated ${selectedCampaignIds.length} campaigns!`, type: 'success' });
+      setIsBulkEditOpen(false);
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to bulk edit campaigns', type: 'error' });
+    } finally {
+      setIsBulkLoading(false);
+    }
+  };
+
+  // Export Campaigns to JSON
+  const handleExportJSON = (onlySelected: boolean = false) => {
+    const toExport = onlySelected && selectedCampaignIds.length > 0
+      ? campaigns.filter(c => selectedCampaignIds.includes(c.id))
+      : campaigns;
+
+    if (toExport.length === 0) {
+      setToastMsg({ text: 'No campaigns to export', type: 'error' });
+      return;
+    }
+
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(toExport, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', `smm_campaigns_backup_${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    setToastMsg({ text: `Exported ${toExport.length} campaign(s) to JSON file!`, type: 'success' });
+  };
+
+  // Explicit Save to Server Files (Writes to campaigns_backup.json and .data/smm_store.json)
+  const handleSaveAllToServer = async () => {
+    setIsSavingToServer(true);
+    try {
+      const res = await fetch('/api/campaigns/save-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaigns })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setToastMsg({
+          text: `All ${data.count} campaigns safely committed to server files (campaigns_backup.json)!`,
+          type: 'success'
+        });
+      } else {
+        throw new Error('Failed to save to server');
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Error saving to server', type: 'error' });
+    } finally {
+      setIsSavingToServer(false);
+    }
+  };
+
+  // Import Campaigns from JSON
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) throw new Error('File must contain an array of campaigns');
+
+        const validCampaigns = parsed.filter(c => c && c.id && c.name && c.targetUrl && Array.isArray(c.batches));
+        if (validCampaigns.length === 0) throw new Error('No valid campaigns found in JSON file');
+
+        const res = await fetch('/api/campaigns/sync-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientCampaigns: validCampaigns })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.campaigns) setCampaigns(data.campaigns);
+          setToastMsg({ text: `Successfully imported ${validCampaigns.length} campaigns from backup!`, type: 'success' });
+        }
+      } catch (err: any) {
+        setToastMsg({ text: err.message || 'Failed to parse JSON file', type: 'error' });
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  // Filtered and sorted campaigns
+  const filteredCampaigns = campaigns.filter(c => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = c.name?.toLowerCase().includes(q);
+      const matchUrl = c.targetUrl?.toLowerCase().includes(q);
+      const matchHandle = c.handle?.toLowerCase().includes(q);
+      if (!matchName && !matchUrl && !matchHandle) return false;
+    }
+
+    if (statusFilter === 'running') return c.status === 'running';
+    if (statusFilter === 'paused') return c.status === 'paused' && !c.lastAutoPause;
+    if (statusFilter === 'auto_paused') return c.status === 'paused' && !!c.lastAutoPause;
+    if (statusFilter === 'completed') return c.status === 'completed';
+
+    return true;
+  }).sort((a, b) => {
+    if (sortBy === 'progress') {
+      const aDone = a.batches.filter(x => x.status === 'success').length / (a.batches.length || 1);
+      const bDone = b.batches.filter(x => x.status === 'success').length / (b.batches.length || 1);
+      return bDone - aDone;
+    }
+    if (sortBy === 'name') {
+      return a.name.localeCompare(b.name);
+    }
+    if (sortBy === 'batches') {
+      return b.batches.length - a.batches.length;
+    }
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+
+  const handleSelectAllFiltered = () => {
+    const filteredIds = filteredCampaigns.map(c => c.id);
+    const allSelected = filteredIds.length > 0 && filteredIds.every(id => selectedCampaignIds.includes(id));
+    if (allSelected) {
+      setSelectedCampaignIds(prev => prev.filter(id => !filteredIds.includes(id)));
+    } else {
+      setSelectedCampaignIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  // Fleet Statistics
+  const totalTargetViews = campaigns.reduce((s, c) => s + (c.metrics?.views || 0), 0);
+  const totalDeliveredViews = campaigns.reduce((s, c) => 
+    s + c.batches.filter(b => b.status === 'success').reduce((bs, b) => bs + (b.views || 0), 0), 0
+  );
+  const totalBatchesCount = campaigns.reduce((s, c) => s + (c.batches?.length || 0), 0);
+  const totalDeliveredBatchesCount = campaigns.reduce((s, c) => 
+    s + c.batches.filter(b => b.status === 'success').length, 0
+  );
+  const runningQueuesCount = campaigns.filter(c => c.status === 'running').length;
+  const pausedQueuesCount = campaigns.filter(c => c.status === 'paused').length;
 
   // Toggle Auto-Pause on Outage / Error
   const handleToggleAutoPause = async (campaign: Campaign) => {
@@ -308,24 +735,211 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Minimalist Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0b0f17] border border-slate-800 rounded-2xl p-5 shadow-xl">
-        <div>
-          <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
-            <Clock className="w-4 h-4 text-purple-400" />
-            <span>Active Campaigns</span>
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Real-time delivery progress and batch schedule for your running campaigns
-          </p>
+      {/* Hidden file input for importing backup */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImportJSON}
+        accept=".json"
+        className="hidden"
+      />
+
+      {/* Fleet KPI Overview & Header Bar */}
+      <div className="bg-[#0b0f17] border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+              <Clock className="w-4 h-4 text-purple-400" />
+              <span>Fleet Operations Hub</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Multi-campaign orchestration, live delivery monitoring, and automated failover
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap font-mono">
+            <button
+              type="button"
+              disabled={isSavingToServer}
+              onClick={handleSaveAllToServer}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-900/60 to-indigo-900/60 border border-purple-500/50 hover:border-purple-400 text-xs text-purple-200 hover:text-white transition-all cursor-pointer shadow-sm shadow-purple-950/50 font-bold disabled:opacity-50"
+              title="Save & commit all current campaigns to server disk (campaigns_backup.json)"
+            >
+              {isSavingToServer ? (
+                <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+              ) : (
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+              <span>Save To Server Disk</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleExportJSON(false)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-purple-500/50 hover:bg-slate-800 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
+              title="Export all campaigns as a JSON backup file to your computer"
+            >
+              <Download className="w-3.5 h-3.5 text-purple-400" />
+              <span>Download JSON</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-slate-800 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
+              title="Import campaigns from a previously saved JSON backup"
+            >
+              <Upload className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Import Backup</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-purple-300 bg-purple-950/40 border border-purple-500/30 px-3 py-1 rounded-xl">
-            {campaigns.filter(c => c.status === 'running').length} Active
-          </span>
-        </div>
+        {/* Fleet KPI Metrics Cards */}
+        {campaigns.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-800/80 font-mono">
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <div className="text-[10px] uppercase text-slate-400">Total Views Fleet</div>
+              <div className="text-sm font-bold text-cyan-300 mt-0.5">
+                {totalDeliveredViews.toLocaleString()} / {totalTargetViews.toLocaleString()}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {totalTargetViews > 0 ? Math.round((totalDeliveredViews / totalTargetViews) * 100) : 0}% Delivered
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <div className="text-[10px] uppercase text-slate-400">Total Batches</div>
+              <div className="text-sm font-bold text-purple-300 mt-0.5">
+                {totalDeliveredBatchesCount} / {totalBatchesCount}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {totalBatchesCount > 0 ? Math.round((totalDeliveredBatchesCount / totalBatchesCount) * 100) : 0}% Dispatched
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <div className="text-[10px] uppercase text-slate-400">Active Engine</div>
+              <div className="text-sm font-bold text-emerald-400 mt-0.5">
+                {runningQueuesCount} Running
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {pausedQueuesCount} Paused
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <div className="text-[10px] uppercase text-slate-400">Selected For Action</div>
+              <div className="text-sm font-bold text-indigo-300 mt-0.5">
+                {selectedCampaignIds.length} Campaigns
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {selectedCampaignIds.length > 0 ? 'Batch actions armed' : 'Click checkboxes to select'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Git Redeployment Shield Status Strip */}
+        {campaigns.length > 0 && (
+          <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-slate-300 font-bold">Redeployment Shield Active:</span>
+              <span className="text-emerald-400">{campaigns.length} campaigns saved in browser & auto-synced to server</span>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+              <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-500/30">Local Cache: Safe</span>
+              <span className="px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-500/30">Auto-Merge: Active</span>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Sticky Bulk Action Command Bar (Displayed when 1 or more campaigns are selected) */}
+      {selectedCampaignIds.length > 0 && (
+        <div className="sticky top-2 z-30 p-3.5 rounded-2xl bg-gradient-to-r from-purple-950/95 via-indigo-950/95 to-slate-900/95 border border-purple-500/50 shadow-2xl backdrop-blur-md flex flex-wrap items-center justify-between gap-3 animate-fade-in font-mono text-xs">
+          <div className="flex items-center gap-3">
+            <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-500/30 font-bold">
+              {selectedCampaignIds.length} Selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedCampaignIds([])}
+              className="text-slate-400 hover:text-white underline cursor-pointer text-[11px]"
+            >
+              Deselect All
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={handleBulkPause}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-amber-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Pause all selected campaigns"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              <span>Bulk Pause</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={handleBulkResume}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Resume all selected campaigns"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>Bulk Resume</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={handleBulkDispatchNext}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Immediately dispatch next batch across all selected campaigns"
+            >
+              <FastForward className="w-3.5 h-3.5" />
+              <span>Fast-Forward Next</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={() => setIsBulkEditOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/40 hover:bg-indigo-600/60 border border-indigo-500/50 text-indigo-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Bulk edit curves, cadences, and failover options"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Bulk Edit</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={() => handleExportJSON(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+              title="Export only selected campaigns to JSON"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Export</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBulkLoading}
+              onClick={() => setIsBulkDeleteConfirmOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-rose-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Delete all selected campaigns"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating Action Feedback Toast */}
       {toastMsg && (
@@ -364,15 +978,95 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Campaigns list sidebar */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
-              Active Queues ({campaigns.length})
-            </h3>
+          {/* Campaigns list sidebar with scrolling keep effect */}
+          <div className="space-y-3 lg:sticky lg:top-4 self-start max-h-[calc(100vh-5rem)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-800 hover:scrollbar-thumb-purple-600/50">
+            {/* Search, Filter, and Sort Controls Header */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
+                  Queues ({filteredCampaigns.length}/{campaigns.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSelectAllFiltered}
+                  className="flex items-center gap-1 text-[11px] font-mono text-purple-400 hover:text-purple-300 transition-colors cursor-pointer"
+                >
+                  {filteredCampaigns.length > 0 && filteredCampaigns.every(c => selectedCampaignIds.includes(c.id)) ? (
+                    <>
+                      <CheckSquare className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Deselect All</span>
+                    </>
+                  ) : (
+                    <>
+                      <Square className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Select All</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Filter name, URL, or handle..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-2 text-slate-500 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter Pills */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px] font-mono scrollbar-none">
+                {(['all', 'running', 'paused', 'auto_paused', 'completed'] as const).map(f => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setStatusFilter(f)}
+                    className={`px-2 py-1 rounded-md transition-all whitespace-nowrap cursor-pointer ${
+                      statusFilter === f
+                        ? 'bg-purple-600 text-white font-bold'
+                        : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    {f === 'auto_paused' ? 'Auto-Paused' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Sort Order Selector */}
+              <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-900">
+                <span className="flex items-center gap-1">
+                  <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                  <span>Sort by:</span>
+                </span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="bg-slate-900 border border-slate-800 rounded px-2 py-0.5 text-slate-300 text-[10px] focus:outline-none focus:border-purple-500"
+                >
+                  <option value="recent">Newest Created</option>
+                  <option value="progress">Progress %</option>
+                  <option value="name">Name (A-Z)</option>
+                  <option value="batches">Total Batches</option>
+                </select>
+              </div>
+            </div>
 
             <div className="space-y-2">
-              {campaigns.map((camp) => {
+              {filteredCampaigns.map((camp) => {
                 const isSelected = selectedCampaign?.id === camp.id;
+                const isMultiSelected = selectedCampaignIds.includes(camp.id);
                 const completedBatches = camp.batches.filter(b => b.status === 'success').length;
                 const progressPct = Math.round((completedBatches / camp.batches.length) * 100);
                 const nextCountdown = getNextBatchCountdown(camp);
@@ -385,32 +1079,50 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                     className={`group relative cursor-pointer p-4 rounded-xl border transition-all ${
                       isSelected
                         ? 'bg-slate-900 border-cyan-500/50 shadow-md shadow-cyan-500/10'
+                        : isMultiSelected
+                        ? 'bg-purple-950/30 border-purple-500/40'
                         : 'bg-slate-950/70 border-slate-800/80 hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-start justify-between">
-                      <div className="truncate pr-2">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
-                            {camp.platform}
-                          </span>
-                          <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                            isAutoPaused
-                              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold'
-                              : camp.status === 'running' 
-                              ? 'bg-emerald-500/20 text-emerald-300' 
-                              : camp.status === 'paused'
-                              ? 'bg-amber-500/20 text-amber-300'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            {isAutoPaused ? 'AUTO-PAUSED' : camp.status.toUpperCase()}
-                          </span>
-                        </div>
-                        <h4 className="font-bold text-white text-sm mt-1 truncate">
-                          {camp.name}
-                        </h4>
-                        <div className="text-[11px] text-slate-400 font-mono truncate">
-                          {camp.handle}
+                      <div className="flex items-start gap-2.5 truncate pr-2">
+                        {/* Multi-Select Checkbox */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleSelectCampaign(camp.id, e)}
+                          className="mt-0.5 text-slate-500 hover:text-purple-400 transition-colors cursor-pointer shrink-0"
+                          title={isMultiSelected ? 'Deselect campaign' : 'Select campaign for bulk actions'}
+                        >
+                          {isMultiSelected ? (
+                            <CheckSquare className="w-4 h-4 text-purple-400" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-600 hover:text-slate-400" />
+                          )}
+                        </button>
+
+                        <div className="truncate">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                              {camp.platform}
+                            </span>
+                            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                              isAutoPaused
+                                ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold'
+                                : camp.status === 'running' 
+                                ? 'bg-emerald-500/20 text-emerald-300' 
+                                : camp.status === 'paused'
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}>
+                              {isAutoPaused ? 'AUTO-PAUSED' : camp.status.toUpperCase()}
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-white text-sm mt-1 truncate">
+                            {camp.name}
+                          </h4>
+                          <div className="text-[11px] text-slate-400 font-mono truncate">
+                            {camp.handle}
+                          </div>
                         </div>
                       </div>
 
@@ -422,16 +1134,15 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
                         {/* Quick Action Icons in List Item */}
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {/* Quick Clone button */}
+                          {/* Quick Clone button (opens configure & clone modal) */}
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleClone(camp.id);
+                              handleOpenCloneModal(camp);
                             }}
-                            disabled={cloningId === camp.id}
                             className="p-1 rounded hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 transition-all cursor-pointer"
-                            title="Clone Campaign"
+                            title="Clone & Customize Campaign"
                           >
                             <Copy className="w-3.5 h-3.5" />
                           </button>
@@ -468,6 +1179,12 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                   </div>
                 );
               })}
+
+              {filteredCampaigns.length === 0 && (
+                <div className="p-6 rounded-xl border border-slate-800/80 bg-slate-950/40 text-center font-mono text-xs text-slate-500">
+                  No campaigns match the filter or search query.
+                </div>
+              )}
             </div>
           </div>
 
@@ -507,15 +1224,33 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 </div>
               )}
 
-              {/* Campaign Status Card */}
-              <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-5 backdrop-blur-sm space-y-4">
+              {/* Campaign Status Card with Sticky Keep Effect */}
+              <div className="sticky top-2 z-20 bg-slate-900/95 border border-slate-800 rounded-xl p-5 backdrop-blur-md space-y-4 shadow-xl transition-all">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-base font-bold text-white">{selectedCampaign.name}</h3>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-mono">
                         Curve: {selectedCampaign.curve}
                       </span>
+                      {/* Follow Live Batch shortcut */}
+                      {selectedCampaign.batches.some(b => b.status === 'running' || b.status === 'pending') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const active = selectedCampaign.batches.find(b => b.status === 'running') || selectedCampaign.batches.find(b => b.status === 'pending');
+                            if (active) {
+                              const el = document.getElementById(`batch-row-${active.batchIndex}`);
+                              el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                          }}
+                          className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono hover:bg-cyan-900/60 transition-all cursor-pointer shadow-sm shadow-cyan-500/10"
+                          title="Scroll view directly to current active batch"
+                        >
+                          <Zap className="w-3 h-3 text-cyan-400 animate-pulse" />
+                          <span>Follow Active Batch</span>
+                        </button>
+                      )}
                     </div>
                     <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-md">
                       {selectedCampaign.targetUrl}
@@ -554,19 +1289,14 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                       <span>Edit</span>
                     </button>
 
-                    {/* Clone Campaign Button */}
+                    {/* Clone Campaign Button (Opens Clone & Configure Modal) */}
                     <button
                       type="button"
-                      onClick={() => handleClone(selectedCampaign.id)}
-                      disabled={cloningId === selectedCampaign.id}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50"
-                      title="Clone entire campaign with refreshed pacing schedule"
+                      onClick={() => handleOpenCloneModal(selectedCampaign)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-mono font-semibold transition-all cursor-pointer"
+                      title="Clone & customize campaign with freshly scheduled batches"
                     >
-                      {cloningId === selectedCampaign.id ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5 text-indigo-400" />
-                      )}
+                      <Copy className="w-3.5 h-3.5 text-indigo-400" />
                       <span>Clone</span>
                     </button>
 
@@ -656,9 +1386,9 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                   </span>
                 </div>
 
-                <div className="overflow-x-auto border border-slate-800 rounded-lg max-h-96">
+                <div className="overflow-x-auto border border-slate-800 rounded-lg max-h-[480px] scrollbar-thin scrollbar-thumb-purple-900/50 hover:scrollbar-thumb-purple-600/70 scrollbar-track-slate-950 scroll-smooth">
                   <table className="w-full text-left text-xs font-mono">
-                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0 z-10 backdrop-blur-md">
                       <tr>
                         <th className="py-2.5 px-3">Batch</th>
                         <th className="py-2.5 px-3">Scheduled At</th>
@@ -671,11 +1401,20 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 bg-slate-950/60 text-slate-300">
-                      {selectedCampaign.batches.map((batch) => (
+                      {selectedCampaign.batches.map((batch, bIdx) => {
+                        const isNextPending = batch.status === 'pending' && selectedCampaign.batches.findIndex(b => b.status === 'pending') === bIdx;
+                        return (
                         <tr
                           key={batch.batchIndex}
+                          id={`batch-row-${batch.batchIndex}`}
                           className={`hover:bg-slate-900/60 transition-colors ${
-                            batch.status === 'success' ? 'bg-emerald-950/10' : batch.status === 'running' ? 'bg-cyan-950/15' : ''
+                            batch.status === 'success' 
+                              ? 'bg-emerald-950/10' 
+                              : batch.status === 'running' 
+                              ? 'bg-cyan-950/30 border-l-4 border-l-cyan-400 font-semibold text-white' 
+                              : isNextPending
+                              ? 'bg-purple-950/20 border-l-4 border-l-purple-500'
+                              : ''
                           }`}
                         >
                           <td className="py-2.5 px-3 font-bold text-white flex items-center gap-1.5">
@@ -780,8 +1519,9 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                             </button>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
+                      );
+                    })}
+                  </tbody>
                   </table>
                 </div>
               </div>
@@ -1322,6 +2062,676 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                   <>
                     <Save className="w-3.5 h-3.5" />
                     <span>Save & Update Campaign</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clone & Configure Campaign Modal */}
+      {cloneModalCampaign && cloneForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fade-in">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-6 max-w-2xl w-full shadow-2xl my-8 space-y-5 text-slate-100 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Copy className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">
+                      Clone & Configure Campaign
+                    </h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono border border-indigo-500/30">
+                      New Duplicate
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Modify target post URL, handle, volume metrics, duration, cadence gaps, or curve before launching.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCloneModalCampaign(null);
+                  setCloneForm(null);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <div className="space-y-4">
+              {/* Campaign Name & Creator Handle */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
+                    New Campaign Name
+                  </label>
+                  <input
+                    type="text"
+                    value={cloneForm.name}
+                    onChange={e => setCloneForm({ ...cloneForm, name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                    placeholder="e.g. Viral Push #2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
+                    Creator Handle
+                  </label>
+                  <input
+                    type="text"
+                    value={cloneForm.handle}
+                    onChange={e => setCloneForm({ ...cloneForm, handle: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                    placeholder="@username"
+                  />
+                </div>
+              </div>
+
+              {/* Target Post / Reel URL with highlight */}
+              <div className="bg-slate-950/80 p-3.5 rounded-xl border border-indigo-500/30 space-y-1.5">
+                <label className="block text-xs font-mono font-bold text-indigo-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-indigo-400" />
+                    Target Post / Reel URL (Edit or Replace Link)
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">Apply recipe to new link</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={cloneForm.targetUrl}
+                    onChange={e => {
+                      const newUrl = e.target.value;
+                      const parsed = parseTargetUrl(newUrl, cloneModalCampaign.platform);
+                      setCloneForm({
+                        ...cloneForm,
+                        targetUrl: newUrl,
+                        handle: parsed.handle && cloneForm.handle.startsWith('@creator_') ? parsed.handle : cloneForm.handle
+                      });
+                    }}
+                    className="w-full bg-slate-900 border border-indigo-500/40 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-400 transition-colors placeholder:text-slate-600"
+                    placeholder="https://www.instagram.com/reel/..."
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Tip: Paste the new Instagram Reel or Post URL here to launch this duplicate for another video.
+                </p>
+              </div>
+
+              {/* Circuit Breaker Auto-Pause Toggle */}
+              <div className="flex items-center justify-between p-3.5 rounded-xl border border-amber-500/30 bg-amber-950/20">
+                <div className="flex items-start gap-3 pr-2">
+                  <ShieldAlert className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-white flex items-center gap-2">
+                      Auto-Pause Campaign if Any Service Is Unavailable
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">
+                        Circuit Breaker
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                      Halts campaign if ReliableSMM or JAP returns API rejection or balance issues. (Likes errors automatically reroute to ReliableSMM without pausing).
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCloneForm({ ...cloneForm, autoPauseOnServiceFailure: !cloneForm.autoPauseOnServiceFailure })}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    cloneForm.autoPauseOnServiceFailure ? 'bg-amber-500' : 'bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      cloneForm.autoPauseOnServiceFailure ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Engagement Metrics */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-mono font-medium text-slate-300 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Target Engagement Volume</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const golden = computeGoldenRatioMetrics(cloneForm.views);
+                      setCloneForm({
+                        ...cloneForm,
+                        likes: golden.likes,
+                        comments: golden.comments,
+                        shares: golden.shares,
+                        saves: golden.saves,
+                        reposts: golden.reposts
+                      });
+                    }}
+                    className="flex items-center gap-1 text-[11px] font-mono text-purple-400 hover:text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded-lg border border-purple-500/20 hover:border-purple-500/40 transition-all cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Auto-Calculate Ratios (Golden Ratio)</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 font-mono text-xs">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Eye className="w-3 h-3 text-cyan-400" /> Views</span>
+                      <span className="text-[9px] text-cyan-400 font-bold">Min 100</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="100"
+                      step="50"
+                      value={cloneForm.views}
+                      onChange={e => setCloneForm({ ...cloneForm, views: Math.max(100, Number(e.target.value) || 100) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-cyan-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Heart className="w-3 h-3 text-pink-400" /> Likes</span>
+                      <span className="text-[9px] text-slate-400">Min 5</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="5"
+                      step="5"
+                      value={cloneForm.likes}
+                      onChange={e => setCloneForm({ ...cloneForm, likes: Math.max(5, Number(e.target.value) || 5) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-pink-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-emerald-400" /> Comments</span>
+                      <span className="text-[9px] text-slate-400">0+</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={cloneForm.comments}
+                      onChange={e => setCloneForm({ ...cloneForm, comments: Math.max(0, Number(e.target.value) || 0) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Share2 className="w-3 h-3 text-emerald-400" /> Shares</span>
+                      <span className="text-[9px] text-emerald-400 font-bold">Min 10</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="10"
+                      step="5"
+                      value={cloneForm.shares}
+                      onChange={e => setCloneForm({ ...cloneForm, shares: Math.max(10, Number(e.target.value) || 10) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><Bookmark className="w-3 h-3 text-amber-400" /> Saves</span>
+                      <span className="text-[9px] text-slate-400">Min 1</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      step="5"
+                      value={cloneForm.saves}
+                      onChange={e => setCloneForm({ ...cloneForm, saves: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-amber-400 pb-0.5"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-slate-400"><RefreshCw className="w-3 h-3 text-indigo-400" /> Reposts</span>
+                      <span className="text-[9px] text-slate-400">Min 1</span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      step="2"
+                      value={cloneForm.reposts}
+                      onChange={e => setCloneForm({ ...cloneForm, reposts: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-indigo-400 pb-0.5"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Cadence Gap Range & Duration */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-mono font-medium text-slate-300 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Cadence Interval & Dynamic Random Gap</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-indigo-400 font-bold">
+                    Random {cloneForm.minMins}–{cloneForm.maxMins}m per batch
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: '20–35m', min: 20, max: 35 },
+                    { label: '25m', min: 20, max: 30 },
+                    { label: '35m', min: 25, max: 45 },
+                    { label: '45m', min: 35, max: 55 },
+                    { label: '60m', min: 45, max: 65 },
+                    { label: '25–60m (Wide)', min: 25, max: 60 },
+                  ].map(p => {
+                    const active = cloneForm.minMins === p.min && cloneForm.maxMins === p.max;
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() => setCloneForm({ ...cloneForm, minMins: p.min, maxMins: p.max })}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer border ${
+                          active
+                            ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5 pt-1 text-xs font-mono">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Duration (Hours)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={cloneForm.durationHours}
+                      onChange={e => setCloneForm({ ...cloneForm, durationHours: Math.max(1, Number(e.target.value) || 1) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Min Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="120"
+                      value={cloneForm.minMins}
+                      onChange={e => setCloneForm({ ...cloneForm, minMins: Math.max(5, Number(e.target.value) || 5) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Max Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min={cloneForm.minMins}
+                      max="180"
+                      value={cloneForm.maxMins}
+                      onChange={e => setCloneForm({ ...cloneForm, maxMins: Math.max(cloneForm.minMins, Number(e.target.value) || cloneForm.minMins) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Algorithmic Curve */}
+              <div>
+                <label className="block text-xs font-mono font-medium text-slate-300 mb-1.5">
+                  Algorithmic Curve
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
+                  {[
+                    { id: 'trending_rocket', label: 'Trending Rocket', icon: '🚀' },
+                    { id: 'steady_climb', label: 'Steady Climb', icon: '📈' },
+                    { id: 'explore_push', label: 'Explore Push', icon: '🔥' },
+                    { id: 'fyp_waves', label: 'FYP Waves', icon: '🌊' },
+                    { id: 'circadian', label: 'Circadian Sleep/Wake', icon: '🌙' },
+                    { id: 'evergreen', label: 'Evergreen Slow-Burn', icon: '⏳' },
+                  ].map(c => {
+                    const isSelected = cloneForm.curve === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setCloneForm({ ...cloneForm, curve: c.id as AlgorithmicCurve })}
+                        className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-950/70 border-indigo-500/60 text-white shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-sm">{c.icon}</span>
+                        <span className="truncate text-[11px] font-bold">{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setCloneModalCampaign(null);
+                  setCloneForm(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingClone}
+                onClick={handleConfirmClone}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isSubmittingClone ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Launching Cloned Campaign...</span>
+                  </>
+                ) : (
+                  <>
+                    <Rocket className="w-3.5 h-3.5" />
+                    <span>Confirm & Launch Cloned Campaign</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Edit Modal */}
+      {isBulkEditOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-purple-500/50 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl shadow-purple-950/50 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400">
+                  <SlidersHorizontal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Bulk Edit Campaigns</h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Applying new settings to {selectedCampaignIds.length} selected campaign(s)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBulkEditOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 font-mono">
+              {/* Selected Campaign Tags */}
+              <div>
+                <label className="text-[11px] text-slate-400 uppercase tracking-wider block mb-1.5">
+                  Target Campaigns
+                </label>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 rounded-xl bg-slate-950 border border-slate-800">
+                  {campaigns
+                    .filter(c => selectedCampaignIds.includes(c.id))
+                    .map(c => (
+                      <span
+                        key={c.id}
+                        className="px-2 py-0.5 rounded-md bg-purple-950/60 border border-purple-500/30 text-purple-200 text-[11px]"
+                      >
+                        {c.name}
+                      </span>
+                    ))}
+                </div>
+              </div>
+
+              {/* Circuit Breaker Auto-Pause Toggle */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <ShieldAlert className="w-4 h-4 text-purple-400" />
+                    <span>Auto-Pause on Service Outage</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Halt dispatch automatically if SMM API returns provider outages
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkEditForm({ ...bulkEditForm, autoPauseOnServiceFailure: !bulkEditForm.autoPauseOnServiceFailure })}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-200 ${
+                    bulkEditForm.autoPauseOnServiceFailure ? 'bg-purple-600 justify-end' : 'bg-slate-800 justify-start'
+                  }`}
+                >
+                  <div className="bg-white w-4 h-4 rounded-full shadow-md" />
+                </button>
+              </div>
+
+              {/* Cadence Range */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-purple-400" />
+                    <span>Batch Cadence Range</span>
+                  </div>
+                  <span className="text-[11px] text-purple-400 font-bold">
+                    Random {bulkEditForm.minMins}–{bulkEditForm.maxMins}m gap
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: '20–35m (Recommended)', min: 20, max: 35 },
+                    { label: '25–40m', min: 25, max: 40 },
+                    { label: '35–55m', min: 35, max: 55 },
+                    { label: '45–65m', min: 45, max: 65 },
+                  ].map(p => {
+                    const active = bulkEditForm.minMins === p.min && bulkEditForm.maxMins === p.max;
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() => setBulkEditForm({ ...bulkEditForm, minMins: p.min, maxMins: p.max })}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer border ${
+                          active
+                            ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 pt-1 text-xs">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Min Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="120"
+                      value={bulkEditForm.minMins}
+                      onChange={e => setBulkEditForm({ ...bulkEditForm, minMins: Math.max(5, Number(e.target.value) || 5) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Max Gap (Mins)</label>
+                    <input
+                      type="number"
+                      min={bulkEditForm.minMins}
+                      max="180"
+                      value={bulkEditForm.maxMins}
+                      onChange={e => setBulkEditForm({ ...bulkEditForm, maxMins: Math.max(bulkEditForm.minMins, Number(e.target.value) || bulkEditForm.minMins) })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-bold mt-0.5 focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Algorithmic Curve */}
+              <div>
+                <label className="text-[11px] text-slate-400 uppercase tracking-wider block mb-1.5">
+                  Delivery Curve Pattern
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                  {[
+                    { id: 'trending_rocket', label: 'Trending Rocket', icon: '🚀' },
+                    { id: 'steady_climb', label: 'Steady Climb', icon: '📈' },
+                    { id: 'explore_push', label: 'Explore Push', icon: '🔥' },
+                    { id: 'fyp_waves', label: 'FYP Waves', icon: '🌊' },
+                    { id: 'circadian', label: 'Circadian Sleep/Wake', icon: '🌙' },
+                    { id: 'evergreen', label: 'Evergreen Slow-Burn', icon: '⏳' },
+                  ].map(c => {
+                    const isSelected = bulkEditForm.curve === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setBulkEditForm({ ...bulkEditForm, curve: c.id as AlgorithmicCurve })}
+                        className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-950/70 border-purple-500/60 text-white shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-sm">{c.icon}</span>
+                        <span className="truncate text-[11px] font-bold">{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Rebalance Pending Batches Checkbox */}
+              <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="rebalance-checkbox"
+                  checked={bulkEditForm.rebalancePendingBatches}
+                  onChange={e => setBulkEditForm({ ...bulkEditForm, rebalancePendingBatches: e.target.checked })}
+                  className="mt-0.5 w-4 h-4 rounded text-purple-600 focus:ring-purple-500 border-slate-700 bg-slate-900 cursor-pointer"
+                />
+                <label htmlFor="rebalance-checkbox" className="text-xs text-slate-300 cursor-pointer">
+                  <span className="font-bold text-white block">Smart Rebalance Pending Batches</span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Recalculates remaining quota and schedule intervals using the selected curve without altering already dispatched batches.
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800 font-mono">
+              <button
+                type="button"
+                onClick={() => setIsBulkEditOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isBulkLoading}
+                onClick={handleApplyBulkEdit}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-purple-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isBulkLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Applying Changes...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Apply To {selectedCampaignIds.length} Campaigns</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirm Modal */}
+      {isBulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-rose-500/50 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl shadow-rose-950/50">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Delete Selected Campaigns?</h3>
+                <p className="text-xs text-slate-400 font-mono">
+                  {selectedCampaignIds.length} campaign(s) will be permanently deleted
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 max-h-36 overflow-y-auto space-y-1 font-mono text-xs">
+              {campaigns
+                .filter(c => selectedCampaignIds.includes(c.id))
+                .map(c => (
+                  <div key={c.id} className="text-slate-300 truncate flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                    <span>{c.name}</span>
+                  </div>
+                ))}
+            </div>
+
+            <p className="text-xs text-rose-300/90 font-mono">
+              All ongoing queued batches will be aborted and removed from the active queue. This action cannot be undone.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800 font-mono">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isBulkLoading}
+                onClick={handleBulkDeleteConfirm}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md shadow-rose-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isBulkLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete ({selectedCampaignIds.length})</span>
                   </>
                 )}
               </button>
