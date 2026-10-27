@@ -435,6 +435,129 @@ app.post('/api/campaigns/launch', async (req: Request, res: Response) => {
   });
 });
 
+// CAMPAIGNS: Bulk Fleet Launch (Multiple URLs grouped under one campaign fleet)
+app.post('/api/campaigns/launch-bulk', async (req: Request, res: Response) => {
+  try {
+    const { groupName, groupId: customGroupId, campaigns: incomingList } = req.body;
+    if (!Array.isArray(incomingList) || incomingList.length === 0) {
+      return res.status(400).json({ error: 'Valid campaigns array is required for bulk launch' });
+    }
+
+    const groupId = customGroupId || 'group_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+    const finalGroupName = groupName?.trim() || `Fleet Push (${incomingList.length} Reels)`;
+    const nowIso = new Date().toISOString();
+    const createdCampaigns: any[] = [];
+
+    for (let i = 0; i < incomingList.length; i++) {
+      const cData = incomingList[i];
+      const campId = 'camp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 5) + '_' + i;
+      const newCamp = {
+        ...cData,
+        id: campId,
+        groupId,
+        groupName: finalGroupName,
+        bulkIndex: i,
+        bulkTotalCount: incomingList.length,
+        isBulkItem: true,
+        status: 'running',
+        createdAt: nowIso,
+        startedAt: nowIso,
+        currentBatchIndex: 0
+      };
+      createdCampaigns.push(newCamp);
+    }
+
+    // Prepend all created campaigns to the fleet
+    campaigns.unshift(...createdCampaigns);
+    persistData();
+
+    // Asynchronously dispatch Batch #0 (Seed chunk warmup) across the fleet with staggered delay
+    (async () => {
+      for (let i = 0; i < createdCampaigns.length; i++) {
+        const c = createdCampaigns[i];
+        if (c.batches && c.batches.length > 0) {
+          try {
+            await executeBatch(c, c.batches[0], true);
+          } catch (e) {
+            console.warn(`[Bulk Launch] Seed batch execution note for ${c.id}:`, e);
+          }
+        }
+      }
+      persistData();
+    })();
+
+    res.status(201).json({
+      success: true,
+      groupId,
+      groupName: finalGroupName,
+      count: createdCampaigns.length,
+      campaigns: createdCampaigns,
+      message: `Successfully launched fleet of ${createdCampaigns.length} campaigns grouped under "${finalGroupName}".`
+    });
+  } catch (err: any) {
+    console.error('Bulk launch error:', err);
+    res.status(500).json({ error: err.message || 'Failed to process bulk campaign launch' });
+  }
+});
+
+// GROUP CAMPAIGNS: Group Pause
+app.post('/api/campaigns/group/:groupId/pause', (req: Request, res: Response) => {
+  const { groupId } = req.params;
+  let count = 0;
+  for (const c of campaigns) {
+    if (c.groupId === groupId && c.status === 'running') {
+      c.status = 'paused';
+      cancelCampaignTimers(c.id);
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Paused ${count} campaigns in group.` });
+});
+
+// GROUP CAMPAIGNS: Group Resume
+app.post('/api/campaigns/group/:groupId/resume', (req: Request, res: Response) => {
+  const { groupId } = req.params;
+  let count = 0;
+  for (const c of campaigns) {
+    if (c.groupId === groupId && c.status === 'paused') {
+      c.status = 'running';
+      if (c.lastAutoPause) c.lastAutoPause = undefined;
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Resumed ${count} campaigns in group.` });
+});
+
+// GROUP CAMPAIGNS: Group Delete
+app.delete('/api/campaigns/group/:groupId', (req: Request, res: Response) => {
+  const { groupId } = req.params;
+  const toDelete = campaigns.filter(c => c.groupId === groupId);
+  for (const c of toDelete) {
+    cancelCampaignTimers(c.id);
+  }
+  campaigns = campaigns.filter(c => c.groupId !== groupId);
+  persistData();
+  res.json({ success: true, deletedCount: toDelete.length, campaigns, message: `Deleted group with ${toDelete.length} campaigns.` });
+});
+
+// GROUP CAMPAIGNS: Group Fast-Forward Next Batch
+app.post('/api/campaigns/group/:groupId/dispatch-next', async (req: Request, res: Response) => {
+  const { groupId } = req.params;
+  const groupCamps = campaigns.filter(c => c.groupId === groupId);
+  let count = 0;
+  for (const c of groupCamps) {
+    const nextPending = c.batches.find((b: any) => b.status === 'pending');
+    if (nextPending) {
+      await executeBatch(c, nextPending, true);
+      count++;
+    }
+  }
+  persistData();
+  res.json({ success: true, count, campaigns, message: `Dispatched next batch for ${count} campaigns in group.` });
+});
+
 // Active timers tracking for staggered intra-batch execution
 const activeCampaignTimers = new Map<string, NodeJS.Timeout[]>();
 
@@ -629,10 +752,20 @@ app.put('/api/campaigns/:id', (req: Request, res: Response) => {
 // CAMPAIGNS: Clone existing campaign (supports optional configuration overrides for URL, name, metrics, etc.)
 app.post('/api/campaigns/:id/clone', async (req: Request, res: Response) => {
   const { id } = req.params;
-  const original = campaigns.find(c => c.id === id);
-  if (!original) return res.status(404).json({ error: 'Source campaign not found' });
-
   const overrides = req.body || {};
+
+  // Find source campaign or use sourceCampaign object provided in body
+  let original = campaigns.find(c => c.id === id);
+  if (!original && overrides.sourceCampaign && overrides.sourceCampaign.id) {
+    original = overrides.sourceCampaign;
+    // Also re-add source to campaigns if missing
+    campaigns.push(original);
+  }
+
+  if (!original) {
+    return res.status(404).json({ error: 'Source campaign not found on server. Please re-sync or refresh.' });
+  }
+
   const cloneId = 'camp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
   const now = Date.now();
 
@@ -680,10 +813,14 @@ app.post('/api/campaigns/:id/clone', async (req: Request, res: Response) => {
   campaigns.unshift(clonedCampaign);
   persistData();
 
-  // Execute Batch #0 (Seed chunk) live for the cloned campaign
+  // Safe live execution of Batch #0 (Seed chunk) so that live API timeouts never break cloning
   if (clonedCampaign.batches.length > 0) {
     const firstBatch = clonedCampaign.batches[0];
-    await executeBatch(clonedCampaign, firstBatch, true);
+    try {
+      await executeBatch(clonedCampaign, firstBatch, true);
+    } catch (batchErr: any) {
+      console.warn(`[Clone Warning] Batch #0 execution note: ${batchErr?.message || batchErr}`);
+    }
   }
 
   console.log(`[Campaign Cloned & Configured] New: "${clonedCampaign.name}" (${cloneId}) Target: ${clonedCampaign.targetUrl}`);

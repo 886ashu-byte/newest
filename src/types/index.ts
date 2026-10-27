@@ -199,6 +199,11 @@ export interface Campaign {
   currentBatchIndex: number;
   riskAudit: AlgorithmicRiskAudit;
   routingConfig: ProviderRoutingConfig;
+  groupId?: string; // Group ID if created as part of a bulk fleet campaign
+  groupName?: string; // Human-readable group / fleet name
+  bulkIndex?: number; // 0-based index within the bulk group
+  bulkTotalCount?: number; // Total number of campaigns in this bulk group
+  isBulkItem?: boolean; // True if created via bulk URLs feature
   autoPauseOnServiceFailure?: boolean; // When any SMM service/API is unavailable or fails, automatically pause campaign
   lastAutoPause?: {
     timestamp: string;
@@ -206,6 +211,53 @@ export interface Campaign {
     serviceId: number | string;
     error: string;
   };
+}
+
+export type VolumeDistributionMode = 'fixed' | 'random_range';
+export type MetricDistributionMode = 'auto_golden' | 'random_range' | 'fixed';
+export type FleetSequenceOrder = 'descending' | 'random' | 'ascending';
+
+export interface BulkUrlItem {
+  id: string;
+  url: string;
+  handle: string;
+  cleanUrl: string;
+  isValid: boolean;
+  assignedMetrics: CampaignMetrics;
+  commentNiche?: CommentNiche;
+}
+
+export interface BulkRangeSettings {
+  mode: VolumeDistributionMode;
+  sequenceOrder?: FleetSequenceOrder; // 'descending': High to Low, 'random': Unordered, 'ascending': Low to High
+  viewsMin: number;
+  viewsMax: number;
+  fixedViews: number;
+  // Likes
+  likesMode: MetricDistributionMode;
+  likesMin: number;
+  likesMax: number;
+  fixedLikes: number;
+  // Comments
+  commentsMode: MetricDistributionMode;
+  commentsMin: number;
+  commentsMax: number;
+  fixedComments: number;
+  // Shares
+  sharesMode: MetricDistributionMode;
+  sharesMin: number;
+  sharesMax: number;
+  fixedShares: number;
+  // Saves
+  savesMode: MetricDistributionMode;
+  savesMin: number;
+  savesMax: number;
+  fixedSaves: number;
+  // Reposts
+  repostsMode: MetricDistributionMode;
+  repostsMin: number;
+  repostsMax: number;
+  fixedReposts: number;
 }
 
 export interface SmmPanel {

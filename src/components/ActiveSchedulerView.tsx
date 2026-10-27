@@ -40,7 +40,11 @@ import {
   Download,
   Upload,
   ArrowUpDown,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Folder,
+  FolderOpen,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Campaign, ScheduledBatch, AlgorithmicCurve } from '../types';
 import { generateCampaignBatches, parseTargetUrl, computeGoldenRatioMetrics } from '../utils/algorithmicEngine';
@@ -142,6 +146,80 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   });
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [isSavingToServer, setIsSavingToServer] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [pastedJsonText, setPastedJsonText] = useState('');
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
+
+  const toggleGroupExpand = (groupId: string) => {
+    setExpandedGroupIds(prev => ({
+      ...prev,
+      [groupId]: prev[groupId] === false ? true : false
+    }));
+  };
+
+  const handleGroupPause = async (groupId: string) => {
+    try {
+      const res = await fetch(`/api/campaigns/group/${groupId}/pause`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Paused all campaigns in group`, type: 'info' });
+      }
+    } catch (e) {
+      setToastMsg({ text: `Failed to pause group`, type: 'error' });
+    }
+  };
+
+  const handleGroupResume = async (groupId: string) => {
+    try {
+      const res = await fetch(`/api/campaigns/group/${groupId}/resume`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Resumed all campaigns in group`, type: 'success' });
+      }
+    } catch (e) {
+      setToastMsg({ text: `Failed to resume group`, type: 'error' });
+    }
+  };
+
+  const handleGroupDelete = async (groupId: string, gName: string) => {
+    if (!window.confirm(`Are you sure you want to delete all campaigns in group "${gName}"?`)) return;
+    try {
+      const res = await fetch(`/api/campaigns/group/${groupId}`, { method: 'DELETE' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Deleted group "${gName}"`, type: 'info' });
+      }
+    } catch (e) {
+      setToastMsg({ text: `Failed to delete group`, type: 'error' });
+    }
+  };
+
+  const handleGroupDispatchNext = async (groupId: string) => {
+    try {
+      const res = await fetch(`/api/campaigns/group/${groupId}/dispatch-next`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Dispatched next batch for group`, type: 'success' });
+      }
+    } catch (e) {
+      setToastMsg({ text: `Failed to dispatch next batch for group`, type: 'error' });
+    }
+  };
+
+  const handleSelectAllInGroup = (groupId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const groupCampIds = campaigns.filter(c => c.groupId === groupId).map(c => c.id);
+    const allInGroupSelected = groupCampIds.length > 0 && groupCampIds.every(id => selectedCampaignIds.includes(id));
+    if (allInGroupSelected) {
+      setSelectedCampaignIds(prev => prev.filter(id => !groupCampIds.includes(id)));
+    } else {
+      setSelectedCampaignIds(prev => Array.from(new Set([...prev, ...groupCampIds])));
+    }
+  };
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -157,15 +235,15 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     setCloneForm({
       sourceId: campaign.id,
       name: `${campaign.name} (Copy)`,
-      targetUrl: campaign.targetUrl,
-      handle: campaign.handle,
+      targetUrl: campaign.targetUrl || '',
+      handle: campaign.handle || '@creator',
       autoPauseOnServiceFailure: campaign.autoPauseOnServiceFailure !== false,
-      views: campaign.metrics.views,
-      likes: campaign.metrics.likes,
-      comments: campaign.metrics.comments,
-      shares: campaign.metrics.shares,
-      saves: campaign.metrics.saves,
-      reposts: campaign.metrics.reposts,
+      views: campaign.metrics?.views ?? 1000,
+      likes: campaign.metrics?.likes ?? 50,
+      comments: campaign.metrics?.comments ?? 10,
+      shares: campaign.metrics?.shares ?? 20,
+      saves: campaign.metrics?.saves ?? 10,
+      reposts: campaign.metrics?.reposts ?? 5,
       durationHours: campaign.durationHours || 24,
       minMins: campaign.cadenceRange?.minMins || 20,
       maxMins: campaign.cadenceRange?.maxMins || 35,
@@ -176,12 +254,19 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   // Confirm & Launch Cloned Campaign with fresh batches
   const handleConfirmClone = async () => {
     if (!cloneModalCampaign || !cloneForm) return;
+
+    const trimmedUrl = cloneForm.targetUrl.trim();
+    if (!trimmedUrl) {
+      setToastMsg({ text: 'Please enter a target URL before cloning.', type: 'error' });
+      return;
+    }
+
     setIsSubmittingClone(true);
 
     try {
-      const parsed = parseTargetUrl(cloneForm.targetUrl, cloneModalCampaign.platform);
-      const cleanHandle = cloneForm.handle.trim() || parsed.handle || cloneModalCampaign.handle;
-      const cleanTargetUrl = cloneForm.targetUrl.trim() || cloneModalCampaign.targetUrl;
+      const parsed = parseTargetUrl(trimmedUrl, cloneModalCampaign.platform);
+      const cleanHandle = cloneForm.handle.trim() || parsed.handle || cloneModalCampaign.handle || '@creator';
+      const cleanTargetUrl = trimmedUrl;
 
       const updatedMetrics = {
         views: Math.max(100, Number(cloneForm.views) || 100),
@@ -194,12 +279,12 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
       const newGeneratedBatches = generateCampaignBatches({
         metrics: updatedMetrics,
-        durationHours: Math.max(1, cloneForm.durationHours),
-        intervalMinutes: Math.round((cloneForm.minMins + cloneForm.maxMins) / 2),
-        curve: cloneForm.curve,
+        durationHours: Math.max(1, cloneForm.durationHours || 24),
+        intervalMinutes: Math.round(((cloneForm.minMins || 20) + (cloneForm.maxMins || 35)) / 2),
+        curve: cloneForm.curve || 'trending_rocket',
         jitterPercent: cloneModalCampaign.jitterPercent || 20,
         seedChunkProtocol: cloneModalCampaign.seedChunkProtocol ?? true,
-        cadenceRange: { minMins: cloneForm.minMins, maxMins: cloneForm.maxMins },
+        cadenceRange: { minMins: cloneForm.minMins || 20, maxMins: cloneForm.maxMins || 35 },
         startDate: new Date()
       });
 
@@ -207,12 +292,13 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         name: cloneForm.name.trim() || `${cloneModalCampaign.name} (Copy)`,
         targetUrl: cleanTargetUrl,
         handle: cleanHandle,
-        autoPauseOnServiceFailure: cloneForm.autoPauseOnServiceFailure,
+        autoPauseOnServiceFailure: cloneForm.autoPauseOnServiceFailure !== false,
         metrics: updatedMetrics,
-        durationHours: cloneForm.durationHours,
-        curve: cloneForm.curve,
-        cadenceRange: { minMins: cloneForm.minMins, maxMins: cloneForm.maxMins },
-        batches: newGeneratedBatches
+        durationHours: cloneForm.durationHours || 24,
+        curve: cloneForm.curve || 'trending_rocket',
+        cadenceRange: { minMins: cloneForm.minMins || 20, maxMins: cloneForm.maxMins || 35 },
+        batches: newGeneratedBatches,
+        sourceCampaign: cloneModalCampaign
       };
 
       let newCamp: any;
@@ -225,7 +311,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           body: JSON.stringify(clonePayload)
         });
         if (!res.ok) {
-          const err = await res.json();
+          const err = await res.json().catch(() => ({}));
           throw new Error(err.error || 'Failed to clone');
         }
         const data = await res.json();
@@ -235,9 +321,11 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         }
       }
 
-      if (newCamp && newCamp.id) {
-        setSelectedCampaignId(newCamp.id);
+      if (!newCamp || !newCamp.id) {
+        throw new Error('Clone creation failed: No campaign returned from server.');
       }
+
+      setSelectedCampaignId(newCamp.id);
       setToastMsg({ text: `Cloned campaign "${clonePayload.name}" created and launched!`, type: 'success' });
       setCloneModalCampaign(null);
       setCloneForm(null);
@@ -497,6 +585,77 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     reader.readAsText(file);
   };
 
+  // Auto-scan browser localStorage for any previously created campaigns
+  const handleCheckBrowserStorage = () => {
+    try {
+      const raw = localStorage.getItem('smm_campaigns_cache');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCampaigns(parsed);
+          fetch('/api/campaigns/sync-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientCampaigns: parsed })
+          });
+          setToastMsg({ text: `Found and restored ${parsed.length} campaigns from your browser cache!`, type: 'success' });
+          setIsImportModalOpen(false);
+          return;
+        }
+      }
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('campaign') || key.includes('smm'))) {
+          const val = localStorage.getItem(key);
+          try {
+            const p = JSON.parse(val || '');
+            if (Array.isArray(p) && p.length > 0 && p[0].batches) {
+              setCampaigns(p);
+              fetch('/api/campaigns/sync-cache', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientCampaigns: p })
+              });
+              setToastMsg({ text: `Recovered ${p.length} campaigns from browser key "${key}"!`, type: 'success' });
+              setIsImportModalOpen(false);
+              return;
+            }
+          } catch (e) {}
+        }
+      }
+      setToastMsg({ text: 'No cached campaigns found in this browser storage.', type: 'info' });
+    } catch (err: any) {
+      setToastMsg({ text: err.message, type: 'error' });
+    }
+  };
+
+  // Import campaigns from pasted raw JSON
+  const handleImportPastedJSON = async () => {
+    if (!pastedJsonText.trim()) return;
+    try {
+      const parsed = JSON.parse(pastedJsonText.trim());
+      const arr = Array.isArray(parsed) ? parsed : (parsed.campaigns && Array.isArray(parsed.campaigns) ? parsed.campaigns : null);
+      if (!arr) throw new Error('Input must be a JSON array of campaigns or object with "campaigns" list');
+      const validCampaigns = arr.filter((c: any) => c && c.id && c.name && Array.isArray(c.batches));
+      if (validCampaigns.length === 0) throw new Error('No valid campaigns with batches found in pasted JSON');
+
+      const res = await fetch('/api/campaigns/sync-cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientCampaigns: validCampaigns })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        setToastMsg({ text: `Successfully restored ${validCampaigns.length} campaigns from pasted JSON!`, type: 'success' });
+        setIsImportModalOpen(false);
+        setPastedJsonText('');
+      }
+    } catch (err: any) {
+      setToastMsg({ text: err.message || 'Invalid JSON format', type: 'error' });
+    }
+  };
+
   // Filtered and sorted campaigns
   const filteredCampaigns = campaigns.filter(c => {
     if (searchQuery.trim()) {
@@ -537,6 +696,82 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
       setSelectedCampaignIds(prev => Array.from(new Set([...prev, ...filteredIds])));
     }
   };
+
+  // Group clustering for bulk fleets and standalone campaigns
+  interface GroupCluster {
+    type: 'group';
+    groupId: string;
+    groupName: string;
+    campaigns: Campaign[];
+    totalViews: number;
+    deliveredViews: number;
+    totalBatches: number;
+    completedBatches: number;
+    progressPct: number;
+    status: 'running' | 'paused' | 'completed';
+  }
+
+  interface SingleCluster {
+    type: 'single';
+    campaign: Campaign;
+  }
+
+  type ClusterItem = GroupCluster | SingleCluster;
+
+  const clusters: ClusterItem[] = React.useMemo(() => {
+    const result: ClusterItem[] = [];
+    const groupMap = new Map<string, Campaign[]>();
+    const processedGroupIds = new Set<string>();
+
+    for (const c of filteredCampaigns) {
+      if (c.groupId) {
+        const list = groupMap.get(c.groupId) || [];
+        list.push(c);
+        groupMap.set(c.groupId, list);
+      }
+    }
+
+    for (const c of filteredCampaigns) {
+      if (c.groupId) {
+        if (!processedGroupIds.has(c.groupId)) {
+          processedGroupIds.add(c.groupId);
+          const gCamps = groupMap.get(c.groupId) || [c];
+          const totalViews = gCamps.reduce((s, x) => s + (x.metrics?.views || 0), 0);
+          const deliveredViews = gCamps.reduce((s, x) => 
+            s + x.batches.filter(b => b.status === 'success').reduce((bs, b) => bs + (b.views || 0), 0), 0
+          );
+          const totalBatches = gCamps.reduce((s, x) => s + (x.batches?.length || 0), 0);
+          const completedBatches = gCamps.reduce((s, x) => 
+            s + x.batches.filter(b => b.status === 'success').length, 0
+          );
+          const progressPct = totalBatches > 0 ? Math.round((completedBatches / totalBatches) * 100) : 0;
+          const allCompleted = gCamps.every(x => x.status === 'completed');
+          const anyRunning = gCamps.some(x => x.status === 'running');
+          const groupStatus: 'running' | 'paused' | 'completed' = allCompleted ? 'completed' : anyRunning ? 'running' : 'paused';
+
+          result.push({
+            type: 'group',
+            groupId: c.groupId,
+            groupName: c.groupName || `Bulk Fleet (${gCamps.length} Reels)`,
+            campaigns: gCamps,
+            totalViews,
+            deliveredViews,
+            totalBatches,
+            completedBatches,
+            progressPct,
+            status: groupStatus,
+          });
+        }
+      } else {
+        result.push({
+          type: 'single',
+          campaign: c,
+        });
+      }
+    }
+
+    return result;
+  }, [filteredCampaigns]);
 
   // Fleet Statistics
   const totalTargetViews = campaigns.reduce((s, c) => s + (c.metrics?.views || 0), 0);
@@ -784,9 +1019,9 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-slate-800 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-              title="Import campaigns from a previously saved JSON backup"
+              title="Import or paste campaigns from backup"
             >
               <Upload className="w-3.5 h-3.5 text-cyan-400" />
               <span>Import Backup</span>
@@ -967,14 +1202,36 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
       {/* Main campaigns display */}
       {campaigns.length === 0 ? (
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mx-auto text-cyan-400">
+        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-10 text-center space-y-5">
+          <div className="w-16 h-16 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mx-auto text-purple-400">
             <Clock className="w-8 h-8" />
           </div>
-          <h3 className="text-base font-bold text-white">No Active Campaigns Running</h3>
-          <p className="text-xs text-slate-400 max-w-md mx-auto">
-            Use the <strong>Campaign Creation Wizard</strong> to configure your platform, ratios, algorithmic curves, and launch your first 24/7 drip campaign.
-          </p>
+          <div>
+            <h3 className="text-base font-bold text-white">No Active Campaigns in Current View</h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
+              If you had campaigns before this redeployment, you can scan your local browser cache or restore from a JSON backup.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2 font-mono">
+            <button
+              type="button"
+              onClick={handleCheckBrowserStorage}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md shadow-purple-900/40 transition-all cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Scan Local Browser Storage</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-slate-800 text-cyan-300 hover:text-white font-bold text-xs transition-all cursor-pointer"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Import / Paste Backup JSON</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1063,8 +1320,238 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
               </div>
             </div>
 
-            <div className="space-y-2">
-              {filteredCampaigns.map((camp) => {
+            <div className="space-y-3">
+              {clusters.map((cluster) => {
+                if (cluster.type === 'group') {
+                  const isGroupExpanded = expandedGroupIds[cluster.groupId] !== false; // Default expanded
+                  const groupCampIds = cluster.campaigns.map(c => c.id);
+                  const allInGroupSelected = groupCampIds.length > 0 && groupCampIds.every(id => selectedCampaignIds.includes(id));
+                  const isAnyChildSelected = cluster.campaigns.some(c => selectedCampaign?.id === c.id);
+
+                  return (
+                    <div
+                      key={cluster.groupId}
+                      className={`rounded-2xl border transition-all overflow-hidden ${
+                        isAnyChildSelected
+                          ? 'bg-slate-900/90 border-purple-500/50 shadow-lg shadow-purple-500/10'
+                          : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Group Header Card */}
+                      <div className="p-3.5 space-y-2.5 bg-gradient-to-r from-purple-950/30 via-slate-900/40 to-slate-950/60">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2.5 truncate">
+                            {/* Group Checkbox */}
+                            <button
+                              type="button"
+                              onClick={(e) => handleSelectAllInGroup(cluster.groupId, e)}
+                              className="mt-0.5 text-slate-500 hover:text-purple-400 transition-colors cursor-pointer shrink-0"
+                              title={allInGroupSelected ? 'Deselect all reels in group' : 'Select all reels in group'}
+                            >
+                              {allInGroupSelected ? (
+                                <CheckSquare className="w-4 h-4 text-purple-400" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-600 hover:text-slate-400" />
+                              )}
+                            </button>
+
+                            <div className="truncate">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold flex items-center gap-1">
+                                  <Folder className="w-3 h-3" />
+                                  <span>Fleet Group</span>
+                                </span>
+                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                                  {cluster.campaigns.length} Reels
+                                </span>
+                                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
+                                  cluster.status === 'running' 
+                                    ? 'bg-emerald-500/20 text-emerald-300' 
+                                    : cluster.status === 'paused'
+                                    ? 'bg-amber-500/20 text-amber-300'
+                                    : 'bg-slate-800 text-slate-400'
+                                }`}>
+                                  {cluster.status.toUpperCase()}
+                                </span>
+                              </div>
+
+                              <h4 className="font-bold text-white text-sm mt-1 truncate">
+                                {cluster.groupName}
+                              </h4>
+                            </div>
+                          </div>
+
+                          {/* Group Expand/Collapse & Progress */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="text-right font-mono">
+                              <div className="text-xs font-bold text-purple-300">{cluster.progressPct}%</div>
+                              <div className="text-[10px] text-slate-500">{cluster.completedBatches}/{cluster.totalBatches}</div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleGroupExpand(cluster.groupId)}
+                              className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                              title={isGroupExpanded ? 'Collapse fleet list' : 'Expand fleet list'}
+                            >
+                              {isGroupExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Progress Bar for Group */}
+                        <div className="w-full h-1.5 bg-slate-800/80 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-purple-500 via-fuchsia-500 to-cyan-400 transition-all duration-300"
+                            style={{ width: `${cluster.progressPct}%` }}
+                          />
+                        </div>
+
+                        {/* Group Actions Bar */}
+                        <div className="flex items-center justify-between text-[11px] font-mono pt-1 text-slate-400 border-t border-slate-800/60">
+                          <div>
+                            <span className="text-slate-500">Views: </span>
+                            <span className="text-white font-bold">{cluster.deliveredViews.toLocaleString()}</span>
+                            <span className="text-slate-500"> / {cluster.totalViews.toLocaleString()}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {cluster.status === 'running' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleGroupPause(cluster.groupId)}
+                                className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[10px] cursor-pointer"
+                                title="Pause all reels in this group"
+                              >
+                                Pause Group
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleGroupResume(cluster.groupId)}
+                                className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[10px] cursor-pointer"
+                                title="Resume all reels in this group"
+                              >
+                                Resume Group
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleGroupDispatchNext(cluster.groupId)}
+                              className="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-[10px] cursor-pointer"
+                              title="Fast-forward next batch for all reels in group"
+                            >
+                              Dispatch Next
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleGroupDelete(cluster.groupId, cluster.groupName)}
+                              className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                              title="Delete all reels in this group"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Nested Individual Reels in Group */}
+                      {isGroupExpanded && (
+                        <div className="p-2 space-y-1.5 bg-slate-950/90 border-t border-slate-800/80">
+                          {cluster.campaigns.map((camp, cIdx) => {
+                            const isSelected = selectedCampaign?.id === camp.id;
+                            const isMultiSelected = selectedCampaignIds.includes(camp.id);
+                            const completedBatches = camp.batches.filter(b => b.status === 'success').length;
+                            const progressPct = Math.round((completedBatches / camp.batches.length) * 100);
+                            const isAutoPaused = camp.status === 'paused' && !!camp.lastAutoPause;
+
+                            return (
+                              <div
+                                key={camp.id}
+                                onClick={() => setSelectedCampaignId(camp.id)}
+                                className={`group p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 text-xs font-mono ${
+                                  isSelected
+                                    ? 'bg-slate-900 border-cyan-500/60 shadow-md shadow-cyan-500/10'
+                                    : isMultiSelected
+                                    ? 'bg-purple-950/40 border-purple-500/40'
+                                    : 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700 hover:bg-slate-900/70'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate pr-2">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleToggleSelectCampaign(camp.id, e)}
+                                    className="text-slate-500 hover:text-purple-400 cursor-pointer shrink-0"
+                                  >
+                                    {isMultiSelected ? (
+                                      <CheckSquare className="w-3.5 h-3.5 text-purple-400" />
+                                    ) : (
+                                      <Square className="w-3.5 h-3.5 text-slate-600 hover:text-slate-400" />
+                                    )}
+                                  </button>
+
+                                  <span className="text-[10px] text-slate-500 font-bold shrink-0">#{cIdx + 1}</span>
+
+                                  <div className="truncate">
+                                    <div className="flex items-center gap-1.5 truncate">
+                                      <span className="px-1.5 py-0.2 rounded bg-purple-900/40 text-purple-300 font-bold text-[10px] shrink-0">
+                                        {camp.handle}
+                                      </span>
+                                      <span className="text-white text-xs truncate">
+                                        {camp.name.replace(cluster.groupName, '').trim() || camp.name}
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 truncate">
+                                      {camp.metrics.views.toLocaleString()} views • {camp.targetUrl}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <div className="text-right">
+                                    <div className="text-[11px] font-bold text-cyan-300">{progressPct}%</div>
+                                    <div className="text-[9px] text-slate-500">{completedBatches}/{camp.batches.length}</div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenCloneModal(camp);
+                                      }}
+                                      className="p-1 rounded hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 transition-all cursor-pointer"
+                                      title="Clone & Customize Reel"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setCampaignToDelete(camp);
+                                      }}
+                                      className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
+                                      title="Delete Reel"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                // Single Standalone Campaign Item
+                const camp = cluster.campaign;
                 const isSelected = selectedCampaign?.id === camp.id;
                 const isMultiSelected = selectedCampaignIds.includes(camp.id);
                 const completedBatches = camp.batches.filter(b => b.status === 'success').length;
@@ -2734,6 +3221,105 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                     <span>Confirm Delete ({selectedCampaignIds.length})</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import & Recovery Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in font-mono">
+          <div className="bg-slate-900 border border-cyan-500/50 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl shadow-cyan-950/50 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white font-sans">Restore Campaign Fleet</h3>
+                  <p className="text-xs text-slate-400">
+                    Import from a JSON file, scan browser storage, or paste JSON
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Method 1: File Upload */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="font-bold text-slate-200">Option 1: Upload Backup File (.json)</div>
+                <p className="text-[11px] text-slate-400">
+                  If you previously clicked "Download JSON", select that file to restore all campaigns instantly.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsImportModalOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="w-full py-2 px-3 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-200 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Choose JSON Backup File</span>
+                </button>
+              </div>
+
+              {/* Method 2: Scan Browser Storage */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="font-bold text-slate-200">Option 2: Deep Scan Local Browser Cache</div>
+                <p className="text-[11px] text-slate-400">
+                  Scans this browser's localStorage for any previous campaign backups or cached queues.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCheckBrowserStorage}
+                  className="w-full py-2 px-3 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Scan Local Browser Storage</span>
+                </button>
+              </div>
+
+              {/* Method 3: Paste Raw JSON */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="font-bold text-slate-200">Option 3: Paste Raw JSON Array</div>
+                <p className="text-[11px] text-slate-400">
+                  Paste copied campaign JSON data directly here:
+                </p>
+                <textarea
+                  rows={4}
+                  value={pastedJsonText}
+                  onChange={e => setPastedJsonText(e.target.value)}
+                  placeholder='[ { "id": "...", "name": "...", "batches": [...] } ]'
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                />
+                <button
+                  type="button"
+                  disabled={!pastedJsonText.trim()}
+                  onClick={handleImportPastedJSON}
+                  className="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Restore From Pasted JSON</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

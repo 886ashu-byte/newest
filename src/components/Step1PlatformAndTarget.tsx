@@ -1,14 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Instagram, 
   CheckCircle2, 
   AlertCircle, 
   ShieldCheck, 
   ShieldAlert,
-  Globe
+  Globe,
+  Layers,
+  Upload,
+  Sparkles,
+  Trash2,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+  Link,
+  Users
 } from 'lucide-react';
-import { Platform } from '../types';
-import { parseTargetUrl } from '../utils/algorithmicEngine';
+import { Platform, BulkUrlItem, CampaignMetrics } from '../types';
+import { parseTargetUrl, computeGoldenRatioMetrics } from '../utils/algorithmicEngine';
 
 interface Step1Props {
   platform: Platform;
@@ -23,6 +32,15 @@ interface Step1Props {
   setCampaignName: (name: string) => void;
   autoPauseOnServiceFailure?: boolean;
   setAutoPauseOnServiceFailure?: (val: boolean) => void;
+  // Bulk URLs Support
+  isBulkMode?: boolean;
+  setIsBulkMode?: (val: boolean) => void;
+  bulkRawText?: string;
+  setBulkRawText?: (text: string) => void;
+  bulkUrls?: BulkUrlItem[];
+  setBulkUrls?: React.Dispatch<React.SetStateAction<BulkUrlItem[]>>;
+  groupName?: string;
+  setGroupName?: (name: string) => void;
 }
 
 export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
@@ -38,6 +56,14 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
   setCampaignName,
   autoPauseOnServiceFailure = true,
   setAutoPauseOnServiceFailure,
+  isBulkMode = false,
+  setIsBulkMode,
+  bulkRawText = '',
+  setBulkRawText,
+  bulkUrls = [],
+  setBulkUrls,
+  groupName = 'Viral Reels Algorithmic Fleet #01',
+  setGroupName,
 }) => {
   const [urlStatus, setUrlStatus] = useState<{
     isValid: boolean;
@@ -46,7 +72,10 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
     errorMessage?: string;
   }>({ isValid: false, handle: '', cleanUrl: '' });
 
-  // Real-time URL validation
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState<boolean>(true);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Real-time Single URL validation
   useEffect(() => {
     if (!targetUrl) {
       setUrlStatus({ isValid: false, handle: '', cleanUrl: '' });
@@ -59,23 +88,143 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
     }
   }, [targetUrl, platform, setHandle]);
 
+  // Real-time Bulk URLs Parser (up to 1,000 URLs)
+  useEffect(() => {
+    if (!isBulkMode || !setBulkUrls) return;
+
+    if (!bulkRawText || !bulkRawText.trim()) {
+      setBulkUrls([]);
+      return;
+    }
+
+    const lines = bulkRawText
+      .split(/[\r\n,]+/)
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    const parsedItems: BulkUrlItem[] = [];
+    const seen = new Set<string>();
+
+    for (let i = 0; i < Math.min(lines.length, 1000); i++) {
+      const rawLine = lines[i];
+      if (seen.has(rawLine)) continue;
+      seen.add(rawLine);
+
+      const parsed = parseTargetUrl(rawLine, platform);
+      const cleanUrl = parsed.cleanUrl || rawLine;
+      const extractedHandle = parsed.handle || (rawLine.includes('@') ? '@' + rawLine.split('@')[1].split('/')[0] : `@creator_${i + 1}`);
+
+      parsedItems.push({
+        id: `bulk_reel_${i}_${Date.now().toString(36)}`,
+        url: rawLine,
+        cleanUrl,
+        handle: extractedHandle,
+        isValid: parsed.isValid,
+        assignedMetrics: computeGoldenRatioMetrics(5000),
+      });
+    }
+
+    setBulkUrls(parsedItems);
+  }, [bulkRawText, isBulkMode, platform, setBulkUrls]);
+
+  // Load 5 sample reels for instant testing
+  const handleLoadSampleUrls = () => {
+    const sampleUrls = [
+      'https://www.instagram.com/reel/DD1rB4wSpK9/',
+      'https://www.instagram.com/reel/DD7hT82oJ6m/',
+      'https://www.instagram.com/reel/DEAcQ81pq3L/',
+      'https://www.instagram.com/reel/DEFm9tqR8vB/',
+      'https://www.instagram.com/reel/DEH-271xZy0/',
+    ];
+    if (setBulkRawText) {
+      setBulkRawText(sampleUrls.join('\n'));
+    }
+    if (setGroupName && (!groupName || groupName.includes('Fleet #01'))) {
+      setGroupName('Instagram Reels Viral Drop #01');
+    }
+  };
+
+  // Upload .txt / .csv file of URLs
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text && setBulkRawText) {
+        setBulkRawText(text);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const validBulkCount = bulkUrls.filter(u => u.isValid).length;
+  const invalidBulkCount = bulkUrls.length - validBulkCount;
+
   return (
     <div className="space-y-6">
-      {/* Campaign Name & Overview */}
+      {/* Campaign Mode Switcher: Single vs Bulk URLs */}
+      {setIsBulkMode && (
+        <div className="bg-slate-100 dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsBulkMode(false)}
+            className={`flex-1 flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold font-mono transition-all cursor-pointer ${
+              !isBulkMode
+                ? 'bg-white dark:bg-slate-950 text-purple-600 dark:text-purple-400 shadow-sm border border-slate-200 dark:border-purple-500/30'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            <span>Single Reel Campaign</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsBulkMode(true)}
+            className={`flex-1 flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold font-mono transition-all cursor-pointer ${
+              isBulkMode
+                ? 'bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-lg shadow-purple-500/30'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Bulk URLs Fleet (1 – 1,000 Reels)</span>
+            <span className="hidden sm:inline text-[10px] px-2 py-0.5 rounded-full bg-white/20 text-white font-mono">
+              Group Mode
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Campaign / Group Identifier */}
       <div className="bg-white dark:bg-[#0b0f17] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm dark:shadow-xl transition-colors">
         <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2 font-mono">
-          Campaign Identifier
+          {isBulkMode ? 'Bulk Campaign Fleet / Group Name' : 'Campaign Identifier'}
         </label>
         <input
           type="text"
-          value={campaignName}
-          onChange={(e) => setCampaignName(e.target.value)}
-          placeholder="e.g. Viral Reels Drip - Summer Drop #01"
+          value={isBulkMode ? groupName : campaignName}
+          onChange={(e) => {
+            if (isBulkMode && setGroupName) {
+              setGroupName(e.target.value);
+            } else {
+              setCampaignName(e.target.value);
+            }
+          }}
+          placeholder={isBulkMode ? "e.g. Summer Viral Reels Fleet #01 (25 Reels)" : "e.g. Viral Reels Drip - Summer Drop #01"}
           className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-colors"
         />
+        {isBulkMode && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-1.5">
+            All reels added below will run together and show in Active Campaigns grouped under this single fleet folder.
+          </p>
+        )}
       </div>
 
-      {/* Step 1: Platform Selection */}
+      {/* Platform Selection */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Instagram Reels Card */}
         <div
@@ -146,7 +295,7 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
                   )}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  FYP Completion Velocity Drip
+                  FYP Acceleration Velocity Drip
                 </p>
               </div>
             </div>
@@ -166,102 +315,234 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
         </div>
       </div>
 
-      {/* URL Input & Handle Extraction */}
-      <div className="bg-white dark:bg-[#0b0f17] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm dark:shadow-xl space-y-4 transition-colors">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2 font-mono">
-            <span>Target Video URL</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
-              Auto Validation
-            </span>
-          </label>
-        </div>
-
-        <div className="relative">
-          <input
-            type="text"
-            value={targetUrl}
-            onChange={(e) => setTargetUrl(e.target.value)}
-            placeholder={
-              platform === 'instagram'
-                ? 'https://www.instagram.com/reel/XXXXXXXXXXX/ or https://instagram.com/p/...'
-                : 'https://www.tiktok.com/@username/video/1234567890123456789'
-            }
-            className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-xl pl-4 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none transition-all ${
-              targetUrl
-                ? urlStatus.isValid
-                  ? 'border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'
-                  : 'border-rose-500 focus:ring-2 focus:ring-rose-500/20'
-                : 'border-slate-300 dark:border-slate-800 focus:border-purple-500'
-            }`}
-          />
-          <div className="absolute right-3 top-3.5">
-            {targetUrl && (
-              urlStatus.isValid ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              ) : (
-                <AlertCircle className="w-5 h-5 text-rose-500" />
-              )
-            )}
-          </div>
-        </div>
-
-        {/* Validation Feedback & Handle Extractor */}
-        {targetUrl && (
-          <div className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-            urlStatus.isValid 
-              ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200' 
-              : 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-300'
-          }`}>
-            <div className="flex items-center gap-2">
-              {urlStatus.isValid ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-              )}
-              <span>
-                {urlStatus.isValid
-                  ? `Target URL validated: ${urlStatus.cleanUrl}`
-                  : (urlStatus.errorMessage || 'Invalid URL format')}
-              </span>
+      {/* TARGET INPUT: BULK URLS MODE */}
+      {isBulkMode ? (
+        <div className="bg-white dark:bg-[#0b0f17] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm dark:shadow-xl space-y-4 transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2 font-mono">
+                <span>Bulk Target URLs (Up to 1,000 Reels)</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-mono font-bold">
+                  {bulkUrls.length} Detected
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Paste one URL per line, comma-separated, or upload a .txt / .csv file.
+              </p>
             </div>
 
-            {urlStatus.isValid && (
-              <div className="flex items-center gap-2 font-mono">
-                <span className="text-slate-500 dark:text-slate-400">Extracted Handle:</span>
-                <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-bold border border-emerald-300 dark:border-emerald-500/30">
-                  {handle || urlStatus.handle || '@target_creator'}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
+            {/* Bulk Action Buttons */}
+            <div className="flex items-center gap-2 flex-wrap font-mono">
+              <button
+                type="button"
+                onClick={handleLoadSampleUrls}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 text-purple-700 dark:text-purple-300 hover:bg-purple-100 text-xs transition-colors cursor-pointer"
+                title="Paste 5 example Instagram reels"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Load 5 Samples</span>
+              </button>
 
-        {/* Handle Manual Override */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Target Username Handle
-            </label>
-            <input
-              type="text"
-              value={handle}
-              onChange={(e) => setHandle(e.target.value)}
-              placeholder="@username"
-              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono transition-colors"
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs transition-colors cursor-pointer">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload List</span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.csv"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              {bulkUrls.length > 0 && setBulkRawText && (
+                <button
+                  type="button"
+                  onClick={() => setBulkRawText('')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-xs transition-colors cursor-pointer"
+                  title="Clear all URLs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Large Bulk Textarea */}
+          <div className="relative">
+            <textarea
+              rows={6}
+              value={bulkRawText}
+              onChange={(e) => setBulkRawText && setBulkRawText(e.target.value)}
+              placeholder={`https://www.instagram.com/reel/DE-96v6s...
+https://www.instagram.com/reel/DF_128a...
+https://www.instagram.com/reel/DG_943c...
+(Paste up to 1,000 URLs here)`}
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl p-3.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 font-mono leading-relaxed"
             />
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Dispatch Target
+
+          {/* Parse Summary Bar */}
+          {bulkUrls.length > 0 && (
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-bold">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{validBulkCount} Valid Reels</span>
+                </div>
+                {invalidBulkCount > 0 && (
+                  <div className="flex items-center gap-1.5 text-amber-500 font-bold">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{invalidBulkCount} Unverified Links</span>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsPreviewExpanded(!isPreviewExpanded)}
+                className="flex items-center gap-1 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer text-xs"
+              >
+                <span>{isPreviewExpanded ? 'Hide Verified List' : `View ${bulkUrls.length} Parsed Reels`}</span>
+                {isPreviewExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          )}
+
+          {/* Collapsible Verified URLs Preview Table */}
+          {bulkUrls.length > 0 && isPreviewExpanded && (
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/60 p-2 space-y-1.5 scrollbar-thin">
+              {bulkUrls.map((item, idx) => (
+                <div
+                  key={item.id || idx}
+                  className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/60 text-xs font-mono gap-2"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="w-6 text-center text-slate-400 font-bold">#{idx + 1}</span>
+                    <span className="px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-bold shrink-0">
+                      {item.handle}
+                    </span>
+                    <span className="text-slate-600 dark:text-slate-400 truncate">
+                      {item.cleanUrl}
+                    </span>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-1.5">
+                    {item.isValid ? (
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Ready</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-amber-500 text-[10px]">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>Custom Link</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* SINGLE URL INPUT MODE */
+        <div className="bg-white dark:bg-[#0b0f17] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm dark:shadow-xl space-y-4 transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2 font-mono">
+              <span>Target Video URL</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
+                Auto Validation
+              </span>
             </label>
-            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-700 dark:text-slate-300 transition-colors">
-              <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <span>Public Video Post Link Verified</span>
+          </div>
+
+          <div className="relative">
+            <input
+              type="text"
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              placeholder={
+                platform === 'instagram'
+                  ? 'https://www.instagram.com/reel/XXXXXXXXXXX/ or https://instagram.com/p/...'
+                  : 'https://www.tiktok.com/@username/video/1234567890123456789'
+              }
+              className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-xl pl-4 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none transition-all ${
+                targetUrl
+                  ? urlStatus.isValid
+                    ? 'border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'
+                    : 'border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+                  : 'border-slate-300 dark:border-slate-800 focus:border-purple-500'
+              }`}
+            />
+            <div className="absolute right-3 top-3.5">
+              {targetUrl && (
+                urlStatus.isValid ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-rose-500" />
+                )
+              )}
+            </div>
+          </div>
+
+          {/* Validation Feedback & Handle Extractor */}
+          {targetUrl && (
+            <div className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              urlStatus.isValid 
+                ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200' 
+                : 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {urlStatus.isValid ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                )}
+                <span>
+                  {urlStatus.isValid
+                    ? `Target URL validated: ${urlStatus.cleanUrl}`
+                    : (urlStatus.errorMessage || 'Invalid URL format')}
+                </span>
+              </div>
+
+              {urlStatus.isValid && (
+                <div className="flex items-center gap-2 font-mono">
+                  <span className="text-slate-500 dark:text-slate-400">Extracted Handle:</span>
+                  <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-bold border border-emerald-300 dark:border-emerald-500/30">
+                    {handle || urlStatus.handle || '@target_creator'}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Handle Manual Override */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                Target Username Handle
+              </label>
+              <input
+                type="text"
+                value={handle}
+                onChange={(e) => setHandle(e.target.value)}
+                placeholder="@username"
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                Dispatch Target
+              </label>
+              <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-700 dark:text-slate-300 transition-colors">
+                <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Public Video Post Link Verified</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Organic Mode Toggle */}
       <div className={`p-5 rounded-2xl border transition-all ${

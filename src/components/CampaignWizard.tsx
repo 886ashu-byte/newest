@@ -23,7 +23,9 @@ import {
   BezierControlPoints, 
   Campaign, 
   SmmPanel,
-  AlgorithmicRiskAudit
+  AlgorithmicRiskAudit,
+  BulkUrlItem,
+  BulkRangeSettings
 } from '../types';
 import { 
   DEFAULT_ROUTING_CONFIG, 
@@ -43,7 +45,7 @@ import { Step5ReviewAndLaunch } from './Step5ReviewAndLaunch';
 interface CampaignWizardProps {
   panels: SmmPanel[];
   currency?: 'USD' | 'INR';
-  onLaunchSuccess: (campaign: Campaign) => void;
+  onLaunchSuccess: (campaign: Campaign | Campaign[]) => void;
 }
 
 export const CampaignWizard: React.FC<CampaignWizardProps> = ({
@@ -52,13 +54,51 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 }) => {
   const [currentStep, setCurrentStep] = useState<number>(1);
 
-  // Wizard State
+  // Single URL Wizard State
   const [campaignName, setCampaignName] = useState('Viral Reels Algorithmic Push #01');
   const [platform, setPlatform] = useState<Platform>('instagram');
   const [targetUrl, setTargetUrl] = useState('');
   const [handle, setHandle] = useState('');
   const [organicMode, setOrganicMode] = useState(true);
   const [autoPauseOnServiceFailure, setAutoPauseOnServiceFailure] = useState(true);
+
+  // Bulk URLs Fleet State
+  const [isBulkMode, setIsBulkMode] = useState<boolean>(false);
+  const [bulkRawText, setBulkRawText] = useState<string>('');
+  const [bulkUrls, setBulkUrls] = useState<BulkUrlItem[]>([]);
+  const [groupName, setGroupName] = useState<string>('Viral Reels Algorithmic Fleet #01');
+  const [bulkRangeSettings, setBulkRangeSettings] = useState<BulkRangeSettings>({
+    mode: 'random_range',
+    sequenceOrder: 'descending',
+    viewsMin: 1000,
+    viewsMax: 5000,
+    fixedViews: 5000,
+    // Likes
+    likesMode: 'auto_golden',
+    likesMin: 80,
+    likesMax: 350,
+    fixedLikes: 280,
+    // Comments
+    commentsMode: 'auto_golden',
+    commentsMin: 5,
+    commentsMax: 30,
+    fixedComments: 12,
+    // Shares
+    sharesMode: 'auto_golden',
+    sharesMin: 10,
+    sharesMax: 80,
+    fixedShares: 35,
+    // Saves
+    savesMode: 'auto_golden',
+    savesMin: 5,
+    savesMax: 50,
+    fixedSaves: 20,
+    // Reposts
+    repostsMode: 'auto_golden',
+    repostsMin: 2,
+    repostsMax: 30,
+    fixedReposts: 10,
+  });
 
   // Metrics
   const [metrics, setMetrics] = useState<CampaignMetrics>(computeGoldenRatioMetrics(5000));
@@ -101,7 +141,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 
   const intervalMinutes = getIntervalMinutes(speedInterval);
 
-  // Computed Batches for Review & Launch
+  // Computed Batches for Single Campaign
   const computedBatches = useMemo(() => {
     return generateCampaignBatches({
       metrics,
@@ -120,7 +160,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     });
   }, [metrics, durationHours, intervalMinutes, curve, bezierPoints, jitterPercent, seedChunkProtocol, curvePoints, audienceRegion, cadenceRange, speedInterval]);
 
-  // Assembled Campaign object
+  // Assembled Single Campaign object
   const assembledCampaign: Campaign = useMemo(() => {
     return {
       id: 'camp_draft_' + Date.now().toString(36),
@@ -174,6 +214,86 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     riskAudit
   ]);
 
+  // Computed Campaign Fleet Objects when in Bulk Mode
+  const computedBulkCampaigns: Campaign[] = useMemo(() => {
+    if (!isBulkMode || bulkUrls.length === 0) return [];
+    const fleetGroupId = 'group_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+    const finalFleetName = groupName.trim() || `Fleet Push (${bulkUrls.length} Reels)`;
+
+    return bulkUrls.map((item, idx) => {
+      const itemMetrics = item.assignedMetrics || computeGoldenRatioMetrics(5000);
+      const batches = generateCampaignBatches({
+        metrics: itemMetrics,
+        durationHours,
+        intervalMinutes,
+        curve,
+        bezierPoints,
+        jitterPercent,
+        seedChunkProtocol,
+        startDate: new Date(),
+        routingConfig: DEFAULT_ROUTING_CONFIG,
+        curvePoints,
+        region: audienceRegion,
+        cadenceRange,
+        speedInterval,
+      });
+
+      const camp: Campaign = {
+        id: `camp_draft_${idx}_${Date.now().toString(36)}`,
+        name: `${finalFleetName} #${idx + 1} (${item.handle})`,
+        platform,
+        targetUrl: item.cleanUrl || item.url,
+        handle: item.handle || '@creator',
+        organicMode,
+        autoPauseOnServiceFailure,
+        metrics: itemMetrics,
+        commentNiche,
+        generatedComments,
+        durationHours,
+        curve,
+        audienceRegion,
+        curvePoints,
+        bezierPoints,
+        speedInterval,
+        cadenceRange,
+        intervalMinutes,
+        jitterPercent,
+        seedChunkProtocol,
+        batches,
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        currentBatchIndex: 0,
+        riskAudit: computeRiskAudit(itemMetrics, curve, jitterPercent, seedChunkProtocol, durationHours, batches.length),
+        routingConfig: DEFAULT_ROUTING_CONFIG,
+        groupId: fleetGroupId,
+        groupName: finalFleetName,
+        bulkIndex: idx,
+        bulkTotalCount: bulkUrls.length,
+        isBulkItem: true,
+      };
+      return camp;
+    });
+  }, [
+    isBulkMode,
+    bulkUrls,
+    groupName,
+    platform,
+    organicMode,
+    autoPauseOnServiceFailure,
+    commentNiche,
+    generatedComments,
+    durationHours,
+    curve,
+    audienceRegion,
+    curvePoints,
+    bezierPoints,
+    speedInterval,
+    cadenceRange,
+    intervalMinutes,
+    jitterPercent,
+    seedChunkProtocol
+  ]);
+
   const steps = [
     { num: 1, title: 'Target & Platform', icon: Zap },
     { num: 2, title: 'Volume & Delivery', icon: Sliders },
@@ -182,7 +302,12 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     { num: 5, title: 'Review & Launch', icon: Rocket },
   ];
 
+  const isStep1Valid = isBulkMode 
+    ? bulkUrls.length > 0 
+    : Boolean(targetUrl.trim());
+
   const handleNext = () => {
+    if (currentStep === 1 && !isStep1Valid) return;
     if (currentStep < 5) setCurrentStep(currentStep + 1);
   };
 
@@ -262,6 +387,14 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             setCampaignName={setCampaignName}
             autoPauseOnServiceFailure={autoPauseOnServiceFailure}
             setAutoPauseOnServiceFailure={setAutoPauseOnServiceFailure}
+            isBulkMode={isBulkMode}
+            setIsBulkMode={setIsBulkMode}
+            bulkRawText={bulkRawText}
+            setBulkRawText={setBulkRawText}
+            bulkUrls={bulkUrls}
+            setBulkUrls={setBulkUrls}
+            groupName={groupName}
+            setGroupName={setGroupName}
           />
         )}
 
@@ -285,6 +418,11 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             setCadenceRange={setCadenceRange}
             curvePoints={curvePoints}
             setCurvePoints={setCurvePoints}
+            isBulkMode={isBulkMode}
+            bulkUrls={bulkUrls}
+            setBulkUrls={setBulkUrls}
+            bulkRangeSettings={bulkRangeSettings}
+            setBulkRangeSettings={setBulkRangeSettings}
           />
         )}
 
@@ -331,6 +469,9 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             campaign={assembledCampaign}
             panels={panels}
             onLaunchSuccess={onLaunchSuccess}
+            isBulkMode={isBulkMode}
+            bulkCampaigns={computedBulkCampaigns}
+            groupName={groupName}
           />
         )}
       </div>
@@ -349,6 +490,11 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 
         <div className="text-xs font-mono text-slate-500 dark:text-slate-400">
           Step {currentStep} of 5 • {steps[currentStep - 1].title}
+          {isBulkMode && (
+            <span className="ml-2 px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-bold">
+              Bulk Fleet ({bulkUrls.length} Reels)
+            </span>
+          )}
         </div>
 
         {currentStep < 5 && (
@@ -374,7 +520,8 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             <button
               type="button"
               onClick={handleNext}
-              className="flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-bold text-xs font-mono shadow-md shadow-purple-500/20 transition-all cursor-pointer"
+              disabled={currentStep === 1 && !isStep1Valid}
+              className="flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-bold text-xs font-mono shadow-md shadow-purple-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
             >
               <span>Continue to Step 0{currentStep + 1}</span>
               <ChevronRight className="w-4 h-4" />

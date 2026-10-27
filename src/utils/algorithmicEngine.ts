@@ -943,55 +943,171 @@ export function generateCampaignBatches(params: {
     { minNonZeroParcel: 100, clusterIfSparse: true, enhanceVariance: true }
   );
 
-  // 2. Engagement indices (Batch #0 and #1 are Seed warmup if seedChunkProtocol enabled)
-  const engagementStartBatch = seedChunkProtocol ? 2 : 0;
-  const engWeights = normalizedWeights.slice(engagementStartBatch);
+  // 2. Engagement indices & Organic Staggering Protocol
+  // Batch #0 is always launch warmup (views only). If seedChunkProtocol is active, Batch #0 & #1 are seed views.
+  const engagementStartBatch = seedChunkProtocol ? 2 : 1;
+  const engCount = Math.max(1, totalBatches - engagementStartBatch);
 
-  // 3. Distribute Engagement metrics across engagement batches
-  // Likes: min parcel 5 (for JAP micro-likes routing #1778 min 5)
-  const likesPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.likes,
-    engWeights,
-    effectiveJitter,
-    101,
-    { minNonZeroParcel: 5, clusterIfSparse: true, enhanceVariance: true }
-  );
+  // Initialize engagement allocation arrays
+  const likesPerBatch: number[] = new Array(engCount).fill(0);
+  const commentsPerBatch: number[] = new Array(engCount).fill(0);
+  const sharesPerBatch: number[] = new Array(engCount).fill(0);
+  const savesPerBatch: number[] = new Array(engCount).fill(0);
+  const repostsPerBatch: number[] = new Array(engCount).fill(0);
 
-  // Comments: distributed in parcels of 1-3
-  const commentsPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.comments,
-    engWeights,
-    effectiveJitter,
-    202,
-    { minNonZeroParcel: 1, clusterIfSparse: true }
-  );
+  // -------------------------------------------------------------
+  // LIKES ROUTING RULE:
+  // "use micro like 5-9 service for first 1-2 batch then use macro because it costly therefore"
+  // First 1-2 like batches get 5-9 micro likes (JAP #1778). Subsequent batches get 10+ macro likes (ReliableSMM #7147).
+  // -------------------------------------------------------------
+  let remainingLikes = Math.max(0, metrics.likes);
+  if (remainingLikes > 0) {
+    if (remainingLikes <= 9) {
+      // Total likes is small: put in Batch 0 of engagement as a single micro parcel (5-9)
+      likesPerBatch[0] = Math.max(5, remainingLikes);
+    } else {
+      // First batch receives 5-9 micro likes (JAP #1778)
+      const micro1 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 6); // 6, 7, 8, or 9
+      likesPerBatch[0] = micro1;
+      remainingLikes -= micro1;
 
-  // Shares: distributed in parcels of 10+ (ReliableSMM #2060 requires min 10)
-  const sharesPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.shares,
-    engWeights,
-    effectiveJitter,
-    303,
-    { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
-  );
+      // Second batch receives micro likes (5-9) if remaining likes allows and at least 2 engagement batches exist
+      if (engCount > 1 && remainingLikes >= 10) {
+        const micro2 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 5); // 5, 6, 7, or 8
+        // Only reserve micro2 if what remains after it can still form valid macro batches of 10+ (or exactly 0)
+        if (remainingLikes - micro2 === 0 || remainingLikes - micro2 >= 10) {
+          likesPerBatch[1] = micro2;
+          remainingLikes -= micro2;
+        }
+      }
 
-  // Saves: distributed in parcels of 2-6 (ReliableSMM #7841 min 1)
-  const savesPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.saves,
-    engWeights,
-    effectiveJitter,
-    404,
-    { minNonZeroParcel: 2, clusterIfSparse: true, enhanceVariance: true }
-  );
+      // Remaining likes are distributed to subsequent batches as MACRO likes (strictly 10+ each for ReliableSMM)
+      if (remainingLikes > 0) {
+        const macroStartIdx = likesPerBatch[1] > 0 ? 2 : 1;
+        const availableMacroBatches = engCount - macroStartIdx;
 
-  // Reposts: distributed in parcels of 1-2 (ReliableSMM #7842 min 1)
-  const repostsPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.reposts,
-    engWeights,
-    effectiveJitter,
-    505,
-    { minNonZeroParcel: 1, clusterIfSparse: true }
-  );
+        if (availableMacroBatches > 0) {
+          const macroWeights = normalizedWeights.slice(engagementStartBatch + macroStartIdx);
+          const macroAllocated = distributeMetricWithCurveAndJitter(
+            remainingLikes,
+            macroWeights,
+            effectiveJitter,
+            707,
+            { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
+          );
+          for (let m = 0; m < macroAllocated.length; m++) {
+            likesPerBatch[macroStartIdx + m] = macroAllocated[m];
+          }
+        } else {
+          // If no later batches exist, add remainder to the last available batch
+          const lastIdx = engCount - 1;
+          likesPerBatch[lastIdx] += remainingLikes;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // ORGANIC ENGAGEMENT STAGGERING:
+  // "and also do not give all engagement firstly place them in shedule randomly"
+  // Randomly distribute Comments, Shares, Saves, Reposts across the timeline so they are not dumped upfront!
+  // -------------------------------------------------------------
+
+  // A. Comments: Staggered randomly across batches (avoiding dumping in Batch 0)
+  if (metrics.comments > 0) {
+    let remComments = metrics.comments;
+    const commentEligibleIndices: number[] = [];
+    const commentStart = engCount > 2 ? 1 : 0;
+    for (let c = commentStart; c < engCount; c++) commentEligibleIndices.push(c);
+
+    const maxDrops = Math.max(1, Math.min(commentEligibleIndices.length, Math.ceil(remComments / 2)));
+    const shuffledCommentIndices = [...commentEligibleIndices].sort((a, b) => {
+      const hA = Math.sin(a * 91 + (startDate?.getTime() || 1));
+      const hB = Math.sin(b * 91 + (startDate?.getTime() || 1));
+      return hA - hB;
+    }).slice(0, maxDrops).sort((a, b) => a - b);
+
+    let commIdx = 0;
+    while (remComments > 0) {
+      const targetBatch = shuffledCommentIndices[commIdx % shuffledCommentIndices.length];
+      const take = Math.min(remComments, commIdx < shuffledCommentIndices.length ? (Math.floor(Math.random() * 2) + 1) : 1);
+      commentsPerBatch[targetBatch] += take;
+      remComments -= take;
+      commIdx++;
+    }
+  }
+
+  // B. Shares: Only after early traction! ReliableSMM #2060 requires strictly 10+ shares.
+  if (metrics.shares > 0) {
+    let remShares = metrics.shares;
+    const shareStart = engCount > 3 ? 2 : engCount > 1 ? 1 : 0;
+    const shareEligible: number[] = [];
+    for (let s = shareStart; s < engCount; s++) shareEligible.push(s);
+
+    const maxShareDrops = Math.max(1, Math.min(shareEligible.length, Math.floor(remShares / 10)));
+    const shuffledShareIndices = [...shareEligible].sort((a, b) => {
+      const hA = Math.sin(a * 137 + 7);
+      const hB = Math.sin(b * 137 + 7);
+      return hA - hB;
+    }).slice(0, maxShareDrops).sort((a, b) => a - b);
+
+    const parcelBase = Math.floor(remShares / Math.max(1, shuffledShareIndices.length));
+    let assignedShares = 0;
+    for (let s = 0; s < shuffledShareIndices.length; s++) {
+      const bIdx = shuffledShareIndices[s];
+      const parcel = s === shuffledShareIndices.length - 1 ? (remShares - assignedShares) : Math.max(10, parcelBase);
+      sharesPerBatch[bIdx] = Math.max(10, parcel);
+      assignedShares += parcel;
+    }
+  }
+
+  // C. Saves: Scatter randomly across mid-to-late batches in parcels of 2-6
+  if (metrics.saves > 0) {
+    let remSaves = metrics.saves;
+    const saveStart = engCount > 3 ? 1 : 0;
+    const saveEligible: number[] = [];
+    for (let sv = saveStart; sv < engCount; sv++) saveEligible.push(sv);
+
+    const maxSaveDrops = Math.max(1, Math.min(saveEligible.length, Math.ceil(remSaves / 3)));
+    const shuffledSaveIndices = [...saveEligible].sort((a, b) => {
+      const hA = Math.cos(a * 241 + 19);
+      const hB = Math.cos(b * 241 + 19);
+      return hA - hB;
+    }).slice(0, maxSaveDrops).sort((a, b) => a - b);
+
+    let sIdx = 0;
+    while (remSaves > 0) {
+      const targetBatch = shuffledSaveIndices[sIdx % shuffledSaveIndices.length];
+      const take = Math.min(remSaves, Math.floor(Math.random() * 3) + 2);
+      savesPerBatch[targetBatch] += take;
+      remSaves -= take;
+      sIdx++;
+    }
+  }
+
+  // D. Reposts: Randomly scattered in later batches in parcels of 1-3
+  if (metrics.reposts > 0) {
+    let remReposts = metrics.reposts;
+    const repostStart = engCount > 2 ? 1 : 0;
+    const repostEligible: number[] = [];
+    for (let r = repostStart; r < engCount; r++) repostEligible.push(r);
+
+    const maxRepostDrops = Math.max(1, Math.min(repostEligible.length, remReposts));
+    const shuffledRepostIndices = [...repostEligible].sort((a, b) => {
+      const hA = Math.sin(a * 359 + 31);
+      const hB = Math.sin(b * 359 + 31);
+      return hA - hB;
+    }).slice(0, maxRepostDrops).sort((a, b) => a - b);
+
+    let rIdx = 0;
+    while (remReposts > 0) {
+      const targetBatch = shuffledRepostIndices[rIdx % shuffledRepostIndices.length];
+      const take = Math.min(remReposts, Math.floor(Math.random() * 2) + 1);
+      repostsPerBatch[targetBatch] += take;
+      remReposts -= take;
+      rIdx++;
+    }
+  }
 
   const batches: ScheduledBatch[] = [];
   let accumulatedTimeMs = startDate.getTime();

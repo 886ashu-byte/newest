@@ -182,9 +182,10 @@ export default function App() {
   }, [campaigns]);
 
   // Handle successful campaign launch
-  const handleLaunchSuccess = (newCampaign: Campaign) => {
-    setCampaigns(prev => [newCampaign, ...prev]);
-    setLaunchSuccessModal(newCampaign);
+  const handleLaunchSuccess = (launched: Campaign | Campaign[]) => {
+    const list = Array.isArray(launched) ? launched : [launched];
+    setCampaigns(prev => [...list, ...prev]);
+    setLaunchSuccessModal(list[0]);
     setActiveTab('campaigns');
   };
 
@@ -284,25 +285,62 @@ export default function App() {
 
   // Clone campaign: Clone on server with optional custom payload and prepend to list
   const handleCloneCampaign = async (campaignId: string, customPayload?: any) => {
+    const source = campaigns.find(c => c.id === campaignId);
+    const fullPayload = {
+      ...(customPayload || {}),
+      sourceCampaign: source
+    };
+
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/clone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(customPayload || {})
+        body: JSON.stringify(fullPayload)
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.campaign) {
-          setCampaigns(prev => {
-            const updated = [data.campaign, ...prev];
-            try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
-            return updated;
-          });
-          return data.campaign;
-        }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server responded with ${res.status}`);
       }
-    } catch (e) {
-      console.error('Failed to clone campaign', e);
+
+      const data = await res.json();
+      if (data.campaign) {
+        setCampaigns(prev => {
+          const updated = [data.campaign, ...prev];
+          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
+          return updated;
+        });
+        return data.campaign;
+      }
+    } catch (e: any) {
+      console.warn('Server clone failed, creating client clone as resilient fallback:', e?.message);
+      // Client-side fallback if server is unreachable
+      if (source && customPayload) {
+        const fallbackClone: Campaign = {
+          ...source,
+          ...customPayload,
+          id: 'camp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6),
+          status: 'running',
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          currentBatchIndex: 0
+        };
+
+        setCampaigns(prev => {
+          const updated = [fallbackClone, ...prev];
+          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (err) {}
+          return updated;
+        });
+
+        // Trigger background sync to server
+        fetch('/api/campaigns/sync-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientCampaigns: [fallbackClone] })
+        }).catch(() => {});
+
+        return fallbackClone;
+      }
       throw e;
     }
   };

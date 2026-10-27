@@ -28,5 +28,38 @@
       "notes": "Micro-Likes specialist (Service 1778, 5-9 likes micro-drip) & Custom Engagement"
     }
   ],
-  "dispatchLogs": []
+  "dispatchLogs": [
+    {
+      "id": "log_1792508934493_views",
+      "campaignId": "camp_mvgtjcqg",
+      "campaignName": "Test Campaign",
+      "batchIndex": 0,
+      "timestamp": "2026-10-20T15:08:54.493Z",
+      "providerName": "ReliableSMM",
+      "serviceId": 8024,
+      "metricType": "views",
+      "quantity": 120,
+      "status": "success",
+      "orderId": "8531105",
+      "responsePayload": {
+        "order": 8531105
+      }
+    },
+    {
+      "id": "log_1792988296372_views",
+      "campaignId": "camp_mvoqxqqv_2koy",
+      "campaignName": "Cloned Test",
+      "batchIndex": 0,
+      "timestamp": "2026-10-26T04:18:16.372Z",
+      "providerName": "ReliableSMM",
+      "serviceId": 8024,
+      "metricType": "views",
+      "quantity": 100,
+      "status": "success",
+      "orderId": "8876806",
+      "responsePayload": {
+        "order": 8876806
+      }
+    }
+  ]
 }
