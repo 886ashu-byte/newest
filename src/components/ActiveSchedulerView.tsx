@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Clock, 
   Play, 
@@ -44,14 +44,30 @@ import {
   Folder,
   FolderOpen,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Repeat,
+  ExternalLink,
+  Award,
+  Printer,
+  RotateCcw,
+  Wrench,
+  DollarSign
 } from 'lucide-react';
-import { Campaign, ScheduledBatch, AlgorithmicCurve } from '../types';
+import { Campaign, ScheduledBatch, AlgorithmicCurve, SmmPanel } from '../types';
 import { generateCampaignBatches, parseTargetUrl, computeGoldenRatioMetrics } from '../utils/algorithmicEngine';
+import { 
+  DEFAULT_PANEL_PRICING, 
+  PanelLivePricing, 
+  calculateCampaignCost, 
+  calculateBatchCost, 
+  formatUsd, 
+  formatInr 
+} from '../utils/pricingEngine';
 
 interface ActiveSchedulerProps {
   campaigns: Campaign[];
   setCampaigns: React.Dispatch<React.SetStateAction<Campaign[]>>;
+  panels?: SmmPanel[];
   onFastForwardBatch: (campaignId: string) => void;
   onPauseCampaign: (campaignId: string) => void;
   onResumeCampaign: (campaignId: string) => void;
@@ -59,11 +75,13 @@ interface ActiveSchedulerProps {
   onSelectCampaignForWizard?: (campaign: Campaign) => void;
   onEditCampaign?: (campaign: Campaign) => Promise<void>;
   onCloneCampaign?: (campaignId: string, customPayload?: any) => Promise<any>;
+  onNavigateToWizard?: () => void;
 }
 
 export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   campaigns,
   setCampaigns,
+  panels,
   onFastForwardBatch,
   onPauseCampaign,
   onResumeCampaign,
@@ -71,10 +89,38 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   onSelectCampaignForWizard,
   onEditCampaign,
   onCloneCampaign,
+  onNavigateToWizard,
 }) => {
+  const isJapActive = useMemo(() => {
+    if (!panels) return true;
+    const jap = panels.find(p => p.id === 'jap');
+    return jap ? (jap.enabled !== false && jap.status !== 'disabled') : true;
+  }, [panels]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     campaigns.length > 0 ? campaigns[0].id : null
   );
+  const [livePricing, setLivePricing] = useState<PanelLivePricing>(DEFAULT_PANEL_PRICING);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadPricing = async () => {
+      try {
+        const res = await fetch('/api/pricing');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.pricing && isMounted) {
+            setLivePricing(data.pricing);
+          }
+        }
+      } catch {
+        // fallback
+      }
+    };
+    loadPricing();
+    return () => { isMounted = false; };
+  }, []);
+
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
   const [campaignToDelete, setCampaignToDelete] = useState<Campaign | null>(null);
   const [inspectBatch, setInspectBatch] = useState<ScheduledBatch | null>(null);
@@ -148,13 +194,148 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   const [isSavingToServer, setIsSavingToServer] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [pastedJsonText, setPastedJsonText] = useState('');
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportCampaign, setReportCampaign] = useState<Campaign | null>(null);
+  const [isAutoHealing, setIsAutoHealing] = useState(false);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
+  const [refillLoadingOrder, setRefillLoadingOrder] = useState<string | null>(null);
 
   const toggleGroupExpand = (groupId: string) => {
     setExpandedGroupIds(prev => ({
       ...prev,
       [groupId]: prev[groupId] === false ? true : false
     }));
+  };
+
+  // Auto-Heal & Verify Orders across campaigns
+  const handleAutoHeal = async (targetCampaignId?: string) => {
+    setIsAutoHealing(true);
+    try {
+      const url = targetCampaignId ? `/api/campaigns/${targetCampaignId}/auto-heal` : '/api/campaigns/auto-heal-all';
+      const res = await fetch(url, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaigns) setCampaigns(data.campaigns);
+        else if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === data.campaign.id ? data.campaign : c));
+        }
+        setToastMsg({
+          text: data.message || 'Auto-Heal & Order verification completed successfully!',
+          type: 'success'
+        });
+      } else {
+        throw new Error('Auto-Heal request failed');
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Error executing Auto-Heal', type: 'error' });
+    } finally {
+      setIsAutoHealing(false);
+    }
+  };
+
+  // 30-Day Auto-Refill Handler via SMM v2 protocol
+  const handleRequestRefill = async (orderId: string, provider: string = 'reliablesmm') => {
+    setRefillLoadingOrder(orderId);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/refill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMsg({ text: data.message, type: 'success' });
+      } else {
+        setToastMsg({ text: data.error || 'Provider rejected refill (may not have dropped yet)', type: 'error' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: e.message || 'Failed to submit refill request', type: 'error' });
+    } finally {
+      setRefillLoadingOrder(null);
+    }
+  };
+
+  // Batch Time Reschedule
+  const handleRescheduleBatch = async (campaignId: string, batchIndex: number, offsetMinutes: number) => {
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/batches/${batchIndex}/reschedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offsetMinutes })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === data.campaign.id ? data.campaign : c));
+        }
+        setToastMsg({ text: data.message, type: 'info' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: 'Failed to reschedule batch', type: 'error' });
+    }
+  };
+
+  // Single Batch Manual Dispatch Override
+  const handleDispatchSingleBatch = async (campaignId: string, batchIndex: number) => {
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/batches/${batchIndex}/dispatch`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.campaign) {
+          setCampaigns(prev => prev.map(c => c.id === data.campaign.id ? data.campaign : c));
+        }
+        setToastMsg({ text: data.message, type: 'success' });
+      }
+    } catch (e: any) {
+      setToastMsg({ text: 'Failed to trigger batch dispatch', type: 'error' });
+    }
+  };
+
+  // Export Client Proof-of-Work CSV
+  const handleExportClientCSV = (campaign: Campaign) => {
+    const rows = [
+      ['Campaign Name', campaign.name],
+      ['Platform', campaign.platform],
+      ['Target URL', campaign.targetUrl],
+      ['Creator Handle', campaign.handle],
+      ['Status', campaign.status],
+      ['Algorithmic Curve', campaign.curve],
+      ['Created At', campaign.createdAt],
+      [],
+      ['Metric', 'Target Goal', 'Status'],
+      ['Views', String(campaign.metrics.views), 'Paced Drip Delivery'],
+      ['Likes', String(campaign.metrics.likes), 'Organic Sync'],
+      ['Comments', String(campaign.metrics.comments), 'Niche Relevant'],
+      ['Shares', String(campaign.metrics.shares), 'Paced Viral'],
+      ['Saves', String(campaign.metrics.saves), 'Signal Safe'],
+      [],
+      ['Batch #', 'Scheduled Time', 'Views', 'Likes', 'Shares', 'Saves', 'Status', 'SMM Order IDs']
+    ];
+
+    campaign.batches.forEach(b => {
+      rows.push([
+        String(b.batchIndex),
+        new Date(b.scheduledAt).toLocaleString(),
+        String(b.views),
+        String(b.likes),
+        String(b.shares),
+        String(b.saves),
+        b.status,
+        b.orderIds ? Object.entries(b.orderIds).map(([k, v]) => `${k}:${v}`).join('; ') : 'Pending'
+      ]);
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Client_Report_${campaign.handle.replace(/[@/]/g, '')}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setToastMsg({ text: 'Client CSV Report downloaded!', type: 'success' });
   };
 
   const handleGroupPause = async (groupId: string) => {
@@ -285,7 +466,8 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         jitterPercent: cloneModalCampaign.jitterPercent || 20,
         seedChunkProtocol: cloneModalCampaign.seedChunkProtocol ?? true,
         cadenceRange: { minMins: cloneForm.minMins || 20, maxMins: cloneForm.maxMins || 35 },
-        startDate: new Date()
+        startDate: new Date(),
+        japEnabled: isJapActive,
       });
 
       const clonePayload = {
@@ -466,7 +648,8 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
             jitterPercent: camp.jitterPercent || 20,
             seedChunkProtocol: false,
             cadenceRange: { minMins: bulkEditForm.minMins, maxMins: bulkEditForm.maxMins },
-            startDate: new Date()
+            startDate: new Date(),
+            japEnabled: isJapActive,
           });
 
           const reindexed = newGen.map((b, idx) => ({
@@ -705,10 +888,23 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     campaigns: Campaign[];
     totalViews: number;
     deliveredViews: number;
+    totalLikes: number;
+    deliveredLikes: number;
+    totalComments: number;
+    deliveredComments: number;
+    totalShares: number;
+    deliveredShares: number;
+    totalSaves: number;
+    deliveredSaves: number;
+    totalReposts: number;
+    deliveredReposts: number;
     totalBatches: number;
     completedBatches: number;
+    runningBatches: number;
+    pendingBatches: number;
     progressPct: number;
     status: 'running' | 'paused' | 'completed';
+    nextBatchText: string;
   }
 
   interface SingleCluster {
@@ -736,15 +932,84 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
         if (!processedGroupIds.has(c.groupId)) {
           processedGroupIds.add(c.groupId);
           const gCamps = groupMap.get(c.groupId) || [c];
-          const totalViews = gCamps.reduce((s, x) => s + (x.metrics?.views || 0), 0);
-          const deliveredViews = gCamps.reduce((s, x) => 
-            s + x.batches.filter(b => b.status === 'success').reduce((bs, b) => bs + (b.views || 0), 0), 0
-          );
-          const totalBatches = gCamps.reduce((s, x) => s + (x.batches?.length || 0), 0);
-          const completedBatches = gCamps.reduce((s, x) => 
-            s + x.batches.filter(b => b.status === 'success').length, 0
-          );
-          const progressPct = totalBatches > 0 ? Math.round((completedBatches / totalBatches) * 100) : 0;
+          
+          let totalViews = 0;
+          let deliveredViews = 0;
+          let totalLikes = 0;
+          let deliveredLikes = 0;
+          let totalComments = 0;
+          let deliveredComments = 0;
+          let totalShares = 0;
+          let deliveredShares = 0;
+          let totalSaves = 0;
+          let deliveredSaves = 0;
+          let totalReposts = 0;
+          let deliveredReposts = 0;
+          let totalBatches = 0;
+          let completedBatches = 0;
+          let runningBatches = 0;
+          let pendingBatches = 0;
+          let earliestNextMs = Infinity;
+          let earliestNextReelIdx = 1;
+          let earliestNextHandle = '';
+
+          for (const camp of gCamps) {
+            totalViews += (camp.metrics?.views || 0);
+            totalLikes += (camp.metrics?.likes || 0);
+            totalComments += (camp.metrics?.comments || 0);
+            totalShares += (camp.metrics?.shares || 0);
+            totalSaves += (camp.metrics?.saves || 0);
+            totalReposts += (camp.metrics?.reposts || 0);
+
+            for (const b of (camp.batches || [])) {
+              totalBatches++;
+              const isSuccess = b.status === 'success';
+              const isDispatched = b.status === 'dispatched';
+              const isRunning = b.status === 'running';
+              const hasOrder = b.orderIds && Object.keys(b.orderIds).some(k => !b.orderIds![k].startsWith('ERR'));
+
+              if (isSuccess || isDispatched || (isRunning && hasOrder)) {
+                completedBatches++;
+                deliveredViews += (b.views || 0);
+                if (b.likes > 0) deliveredLikes += b.likes;
+                if (b.comments > 0) deliveredComments += b.comments;
+                if (b.shares > 0) deliveredShares += b.shares;
+                if (b.saves > 0) deliveredSaves += b.saves;
+                if (b.reposts > 0) deliveredReposts += b.reposts;
+              } else if (isRunning) {
+                runningBatches++;
+              } else if (b.status === 'pending') {
+                pendingBatches++;
+                if (camp.status === 'running') {
+                  const schedMs = new Date(b.scheduledAt).getTime();
+                  if (schedMs < earliestNextMs) {
+                    earliestNextMs = schedMs;
+                    earliestNextReelIdx = (camp.bulkIndex ?? 0) + 1;
+                    earliestNextHandle = camp.handle || '@creator';
+                  }
+                }
+              }
+            }
+          }
+
+          let nextBatchText = 'All Batches Delivered';
+          if (gCamps.every(x => x.status === 'paused')) {
+            nextBatchText = 'Fleet Paused';
+          } else if (earliestNextMs !== Infinity) {
+            const diff = earliestNextMs - currentTime;
+            if (diff <= 0) {
+              nextBatchText = `Reel #${earliestNextReelIdx} (${earliestNextHandle}): Dispatching now`;
+            } else {
+              const mins = Math.floor(diff / 60000);
+              const secs = Math.floor((diff % 60000) / 1000);
+              nextBatchText = `Reel #${earliestNextReelIdx} (${earliestNextHandle}) in ${mins > 0 ? `${mins}m ` : ''}${secs}s`;
+            }
+          }
+
+          const progressPct = totalViews > 0 
+            ? Math.min(100, Math.round((deliveredViews / totalViews) * 100))
+            : (totalBatches > 0 ? Math.min(100, Math.round((completedBatches / totalBatches) * 100)) : 0);
+
           const allCompleted = gCamps.every(x => x.status === 'completed');
           const anyRunning = gCamps.some(x => x.status === 'running');
           const groupStatus: 'running' | 'paused' | 'completed' = allCompleted ? 'completed' : anyRunning ? 'running' : 'paused';
@@ -756,10 +1021,23 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
             campaigns: gCamps,
             totalViews,
             deliveredViews,
+            totalLikes,
+            deliveredLikes,
+            totalComments,
+            deliveredComments,
+            totalShares,
+            deliveredShares,
+            totalSaves,
+            deliveredSaves,
+            totalReposts,
+            deliveredReposts,
             totalBatches,
             completedBatches,
+            runningBatches,
+            pendingBatches,
             progressPct,
             status: groupStatus,
+            nextBatchText,
           });
         }
       } else {
@@ -771,16 +1049,16 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     }
 
     return result;
-  }, [filteredCampaigns]);
+  }, [filteredCampaigns, currentTime]);
 
   // Fleet Statistics
   const totalTargetViews = campaigns.reduce((s, c) => s + (c.metrics?.views || 0), 0);
   const totalDeliveredViews = campaigns.reduce((s, c) => 
-    s + c.batches.filter(b => b.status === 'success').reduce((bs, b) => bs + (b.views || 0), 0), 0
+    s + c.batches.filter(b => b.status === 'success' || b.status === 'dispatched' || (b.orderIds?.views && !b.orderIds.views.startsWith('ERR'))).reduce((bs, b) => bs + (b.views || 0), 0), 0
   );
   const totalBatchesCount = campaigns.reduce((s, c) => s + (c.batches?.length || 0), 0);
   const totalDeliveredBatchesCount = campaigns.reduce((s, c) => 
-    s + c.batches.filter(b => b.status === 'success').length, 0
+    s + c.batches.filter(b => b.status === 'success' || b.status === 'dispatched' || (b.orderIds && Object.keys(b.orderIds).some(k => !b.orderIds![k].startsWith('ERR')))).length, 0
   );
   const runningQueuesCount = campaigns.filter(c => c.status === 'running').length;
   const pausedQueuesCount = campaigns.filter(c => c.status === 'paused').length;
@@ -877,7 +1155,8 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           jitterPercent: editModalCampaign.jitterPercent || 20,
           seedChunkProtocol: false, // Warmup already done
           cadenceRange: { minMins: editForm.minMins, maxMins: editForm.maxMins },
-          startDate: new Date()
+          startDate: new Date(),
+          japEnabled: isJapActive,
         });
 
         // Merge: keep doneBatches, append reindexed newGenerated
@@ -928,16 +1207,20 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     }
   };
 
-  // Sync selectedCampaignId if deleted or changed
+  // Sync selectedCampaignId and selectedGroupId if deleted or changed
   useEffect(() => {
+    if (selectedGroupId && !campaigns.some(c => c.groupId === selectedGroupId)) {
+      setSelectedGroupId(null);
+    }
     if (campaigns.length > 0) {
-      if (!selectedCampaignId || !campaigns.some(c => c.id === selectedCampaignId)) {
+      if (!selectedGroupId && (!selectedCampaignId || !campaigns.some(c => c.id === selectedCampaignId))) {
         setSelectedCampaignId(campaigns[0].id);
       }
     } else {
       setSelectedCampaignId(null);
+      setSelectedGroupId(null);
     }
-  }, [campaigns, selectedCampaignId]);
+  }, [campaigns, selectedCampaignId, selectedGroupId]);
 
   // Clock ticker for real-time countdown updates
   useEffect(() => {
@@ -947,7 +1230,13 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  const selectedCampaign = campaigns.find(c => c.id === selectedCampaignId) || campaigns[0];
+  const selectedGroupCluster = selectedGroupId 
+    ? (clusters.find(c => c.type === 'group' && c.groupId === selectedGroupId) as GroupCluster | undefined)
+    : undefined;
+
+  const selectedCampaign = selectedCampaignId 
+    ? campaigns.find(c => c.id === selectedCampaignId) || null
+    : (!selectedGroupId && campaigns.length > 0 ? campaigns[0] : null);
 
   // Calculate next scheduled batch countdown
   const getNextBatchCountdown = (campaign: Campaign) => {
@@ -993,38 +1282,47 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap font-mono">
+            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-950/50 border border-emerald-500/30 text-emerald-300 text-xs shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-bold">Cloud Server Database:</span>
+              <span className="text-slate-300">Live & Auto-Persisted</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-500/20 font-semibold hidden sm:inline">24/7 Engine Active</span>
+            </div>
+
             <button
               type="button"
-              disabled={isSavingToServer}
-              onClick={handleSaveAllToServer}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-900/60 to-indigo-900/60 border border-purple-500/50 hover:border-purple-400 text-xs text-purple-200 hover:text-white transition-all cursor-pointer shadow-sm shadow-purple-950/50 font-bold disabled:opacity-50"
-              title="Save & commit all current campaigns to server disk (campaigns_backup.json)"
+              disabled={isAutoHealing}
+              onClick={() => handleAutoHeal()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm disabled:opacity-50"
+              title="Scan all batch orders, re-route canceled/partial deliveries, and clear circuit breaker auto-pause"
             >
-              {isSavingToServer ? (
-                <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
-              ) : (
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              )}
-              <span>Save To Server Disk</span>
+              <ShieldCheck className={`w-3.5 h-3.5 text-emerald-400 ${isAutoHealing ? 'animate-spin' : ''}`} />
+              <span>{isAutoHealing ? 'Auditing Orders...' : 'Auto-Heal & Verify'}</span>
             </button>
+
+            {selectedCampaign && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReportCampaign(selectedCampaign);
+                  setIsReportModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                title="Open branded White-Label Client Proof-of-Work Certificate & PDF Export"
+              >
+                <Award className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Client Proof-of-Work</span>
+              </button>
+            )}
 
             <button
               type="button"
               onClick={() => handleExportJSON(false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-purple-500/50 hover:bg-slate-800 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-              title="Export all campaigns as a JSON backup file to your computer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs transition-all cursor-pointer"
+              title="Download full JSON backup of all campaigns"
             >
-              <Download className="w-3.5 h-3.5 text-purple-400" />
-              <span>Download JSON</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-slate-800 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-              title="Import or paste campaigns from backup"
-            >
-              <Upload className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Import Backup</span>
+              <Download className="w-3.5 h-3.5" />
+              <span>Backup JSON</span>
             </button>
           </div>
         </div>
@@ -1074,17 +1372,17 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
           </div>
         )}
 
-        {/* Git Redeployment Shield Status Strip */}
+        {/* Cloud Persistence Engine Status Strip */}
         {campaigns.length > 0 && (
           <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-slate-300 font-bold">Redeployment Shield Active:</span>
-              <span className="text-emerald-400">{campaigns.length} campaigns saved in browser & auto-synced to server</span>
+              <span className="text-slate-300 font-bold">Cloud Persistence Engine:</span>
+              <span className="text-emerald-400">{campaigns.length} campaign{campaigns.length > 1 ? 's' : ''} directly saved to cloud server storage</span>
             </div>
             <div className="flex items-center gap-2 text-[10px] text-slate-400">
-              <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-500/30">Local Cache: Safe</span>
-              <span className="px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-500/30">Auto-Merge: Active</span>
+              <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-500/30">Auto-Persist: 24/7 Active</span>
+              <span className="px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-500/30">Server Storage: Synced</span>
             </div>
           </div>
         )}
@@ -1202,35 +1500,32 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
       {/* Main campaigns display */}
       {campaigns.length === 0 ? (
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-10 text-center space-y-5">
-          <div className="w-16 h-16 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mx-auto text-purple-400">
-            <Clock className="w-8 h-8" />
+        <div className="bg-[#0b0f17] border border-slate-800 rounded-2xl p-12 text-center space-y-6 max-w-2xl mx-auto shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-purple-600/20 to-cyan-600/20 border border-purple-500/30 flex items-center justify-center mx-auto text-purple-400 shadow-lg shadow-purple-500/10">
+            <Clock className="w-8 h-8 text-purple-400" />
           </div>
-          <div>
-            <h3 className="text-base font-bold text-white">No Active Campaigns in Current View</h3>
-            <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
-              If you had campaigns before this redeployment, you can scan your local browser cache or restore from a JSON backup.
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/50 border border-emerald-500/30 text-emerald-400 text-xs font-mono font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Cloud Database Live & Synced</span>
+            </div>
+            <h3 className="text-lg font-bold text-white tracking-tight">No Active Campaigns in Cloud Database</h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+              Create single or bulk URL campaigns via the Campaign Wizard. All campaigns are directly saved to cloud server storage with 24/7 autonomous drip execution.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2 font-mono">
-            <button
-              type="button"
-              onClick={handleCheckBrowserStorage}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md shadow-purple-900/40 transition-all cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Scan Local Browser Storage</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-slate-800 text-cyan-300 hover:text-white font-bold text-xs transition-all cursor-pointer"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Import / Paste Backup JSON</span>
-            </button>
+          <div className="pt-2">
+            {onNavigateToWizard && (
+              <button
+                type="button"
+                onClick={onNavigateToWizard}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-bold text-xs font-mono shadow-lg shadow-purple-500/25 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <Rocket className="w-4 h-4" />
+                <span>Launch New Campaign</span>
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -1328,17 +1623,31 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                   const allInGroupSelected = groupCampIds.length > 0 && groupCampIds.every(id => selectedCampaignIds.includes(id));
                   const isAnyChildSelected = cluster.campaigns.some(c => selectedCampaign?.id === c.id);
 
+                  const isGroupSelected = selectedGroupId === cluster.groupId;
+
                   return (
                     <div
                       key={cluster.groupId}
                       className={`rounded-2xl border transition-all overflow-hidden ${
-                        isAnyChildSelected
+                        isGroupSelected
+                          ? 'border-purple-400 bg-purple-950/40 ring-2 ring-purple-500/50 shadow-xl shadow-purple-950/50'
+                          : isAnyChildSelected
                           ? 'bg-slate-900/90 border-purple-500/50 shadow-lg shadow-purple-500/10'
                           : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
                       }`}
                     >
-                      {/* Group Header Card */}
-                      <div className="p-3.5 space-y-2.5 bg-gradient-to-r from-purple-950/30 via-slate-900/40 to-slate-950/60">
+                      {/* Group Header Card (Clickable to open Fleet Command Center) */}
+                      <div 
+                        onClick={() => {
+                          setSelectedGroupId(cluster.groupId);
+                          setSelectedCampaignId(null);
+                        }}
+                        className={`p-3.5 space-y-2.5 transition-colors cursor-pointer ${
+                          isGroupSelected 
+                            ? 'bg-gradient-to-r from-purple-950/70 via-indigo-950/60 to-slate-900/80' 
+                            : 'bg-gradient-to-r from-purple-950/30 via-slate-900/40 to-slate-950/60 hover:bg-slate-900/50'
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-start gap-2.5 truncate">
                             {/* Group Checkbox */}
@@ -1371,12 +1680,12 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                                     ? 'bg-amber-500/20 text-amber-300'
                                     : 'bg-slate-800 text-slate-400'
                                 }`}>
-                                  {cluster.status.toUpperCase()}
+                                  {(cluster.status || 'running').toUpperCase()}
                                 </span>
                               </div>
 
-                              <h4 className="font-bold text-white text-sm mt-1 truncate">
-                                {cluster.groupName}
+                              <h4 className="font-bold text-white text-sm mt-1 truncate flex items-center gap-2">
+                                <span>{cluster.groupName}</span>
                               </h4>
                             </div>
                           </div>
@@ -1390,7 +1699,10 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
                             <button
                               type="button"
-                              onClick={() => toggleGroupExpand(cluster.groupId)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleGroupExpand(cluster.groupId);
+                              }}
                               className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
                               title={isGroupExpanded ? 'Collapse fleet list' : 'Expand fleet list'}
                             >
@@ -1407,53 +1719,71 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                           />
                         </div>
 
+                        {/* Group Metrics Delivery & Pulse */}
+                        <div className="space-y-1 pt-1 text-[11px] font-mono border-t border-slate-800/60">
+                          <div className="flex items-center justify-between text-slate-400">
+                            <div>
+                              <span className="text-slate-500">Views: </span>
+                              <span className="text-cyan-300 font-bold">{cluster.deliveredViews.toLocaleString()}</span>
+                              <span className="text-slate-500"> / {cluster.totalViews.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Likes: </span>
+                              <span className="text-pink-300 font-bold">{cluster.deliveredLikes.toLocaleString()}</span>
+                              <span className="text-slate-500"> / {cluster.totalLikes.toLocaleString()}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-400">
+                            <div className="truncate max-w-[190px]">
+                              <span className="text-purple-400 font-semibold">Pulse: </span>
+                              <span className="text-slate-300">{cluster.nextBatchText}</span>
+                            </div>
+                            <span className="text-emerald-400 font-semibold">{cluster.completedBatches} done</span>
+                          </div>
+                        </div>
+
                         {/* Group Actions Bar */}
-                        <div className="flex items-center justify-between text-[11px] font-mono pt-1 text-slate-400 border-t border-slate-800/60">
-                          <div>
-                            <span className="text-slate-500">Views: </span>
-                            <span className="text-white font-bold">{cluster.deliveredViews.toLocaleString()}</span>
-                            <span className="text-slate-500"> / {cluster.totalViews.toLocaleString()}</span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            {cluster.status === 'running' ? (
-                              <button
-                                type="button"
-                                onClick={() => handleGroupPause(cluster.groupId)}
-                                className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[10px] cursor-pointer"
-                                title="Pause all reels in this group"
-                              >
-                                Pause Group
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleGroupResume(cluster.groupId)}
-                                className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[10px] cursor-pointer"
-                                title="Resume all reels in this group"
-                              >
-                                Resume Group
-                              </button>
-                            )}
-
+                        <div 
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-800/60 text-[10px] font-mono"
+                        >
+                          {cluster.status === 'running' ? (
                             <button
                               type="button"
-                              onClick={() => handleGroupDispatchNext(cluster.groupId)}
-                              className="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-[10px] cursor-pointer"
-                              title="Fast-forward next batch for all reels in group"
+                              onClick={() => handleGroupPause(cluster.groupId)}
+                              className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 cursor-pointer"
+                              title="Pause all reels in this group"
                             >
-                              Dispatch Next
+                              Pause
                             </button>
-
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => handleGroupDelete(cluster.groupId, cluster.groupName)}
-                              className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
-                              title="Delete all reels in this group"
+                              onClick={() => handleGroupResume(cluster.groupId)}
+                              className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 cursor-pointer"
+                              title="Resume all reels in this group"
                             >
-                              <Trash2 className="w-3 h-3" />
+                              Resume
                             </button>
-                          </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleGroupDispatchNext(cluster.groupId)}
+                            className="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 cursor-pointer"
+                            title="Fast-forward next batch for all reels in group"
+                          >
+                            Dispatch Next
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleGroupDelete(cluster.groupId, cluster.groupName)}
+                            className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="Delete all reels in this group"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
 
@@ -1463,14 +1793,17 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                           {cluster.campaigns.map((camp, cIdx) => {
                             const isSelected = selectedCampaign?.id === camp.id;
                             const isMultiSelected = selectedCampaignIds.includes(camp.id);
-                            const completedBatches = camp.batches.filter(b => b.status === 'success').length;
-                            const progressPct = Math.round((completedBatches / camp.batches.length) * 100);
+                            const completedBatches = camp.batches.filter(b => b.status === 'success' || b.status === 'dispatched' || (b.orderIds && Object.keys(b.orderIds).some(k => !b.orderIds![k].startsWith('ERR')))).length;
+                            const progressPct = camp.batches.length > 0 ? Math.round((completedBatches / camp.batches.length) * 100) : 0;
                             const isAutoPaused = camp.status === 'paused' && !!camp.lastAutoPause;
 
                             return (
                               <div
                                 key={camp.id}
-                                onClick={() => setSelectedCampaignId(camp.id)}
+                                onClick={() => {
+                                  setSelectedCampaignId(camp.id);
+                                  setSelectedGroupId(null);
+                                }}
                                 className={`group p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 text-xs font-mono ${
                                   isSelected
                                     ? 'bg-slate-900 border-cyan-500/60 shadow-md shadow-cyan-500/10'
@@ -1601,7 +1934,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                                 ? 'bg-amber-500/20 text-amber-300'
                                 : 'bg-slate-800 text-slate-400'
                             }`}>
-                              {isAutoPaused ? 'AUTO-PAUSED' : camp.status.toUpperCase()}
+                              {isAutoPaused ? 'AUTO-PAUSED' : (camp.status || 'running').toUpperCase()}
                             </span>
                           </div>
                           <h4 className="font-bold text-white text-sm mt-1 truncate">
@@ -1675,9 +2008,395 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
             </div>
           </div>
 
-          {/* Campaign Detail & Real-time Live Ticker */}
-          {selectedCampaign && (
-            <div className="lg:col-span-2 space-y-5">
+          {/* Right Detail Pane: Group Fleet Command Center OR Single Campaign Live View */}
+          {selectedGroupCluster ? (
+            <div className="lg:col-span-2 space-y-5 animate-fade-in">
+              {/* Group Fleet Command Center Header */}
+              <div className="sticky top-2 z-20 bg-slate-900/95 border border-purple-500/40 rounded-xl p-5 backdrop-blur-md space-y-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold flex items-center gap-1">
+                        <Folder className="w-3 h-3 text-purple-400" />
+                        <span>Fleet Command Center</span>
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+                        {selectedGroupCluster.campaigns.length} Reels
+                      </span>
+                      <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold font-mono ${
+                        selectedGroupCluster.status === 'running'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : selectedGroupCluster.status === 'paused'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                      }`}>
+                        {(selectedGroupCluster.status || 'running').toUpperCase()}
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-bold text-white mt-1.5 flex items-center gap-2">
+                      <span>{selectedGroupCluster.groupName}</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      Orchestrating {selectedGroupCluster.campaigns.length} reels • {selectedGroupCluster.deliveredViews.toLocaleString()} of {selectedGroupCluster.totalViews.toLocaleString()} views delivered ({selectedGroupCluster.progressPct}%)
+                    </p>
+                  </div>
+
+                  {/* Fleet Control Actions */}
+                  <div className="flex items-center flex-wrap gap-2 font-mono">
+                    {selectedGroupCluster.status === 'running' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleGroupPause(selectedGroupCluster.groupId)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-all cursor-pointer"
+                        title="Pause all reels in this fleet"
+                      >
+                        <Pause className="w-3.5 h-3.5" />
+                        <span>Pause Fleet</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleGroupResume(selectedGroupCluster.groupId)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all cursor-pointer"
+                        title="Resume all reels in this fleet"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        <span>Resume Fleet</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleGroupDispatchNext(selectedGroupCluster.groupId)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
+                      title="Fast-forward next batch across all pending reels in this fleet"
+                    >
+                      <FastForward className="w-3.5 h-3.5" />
+                      <span>Fast-Forward Fleet</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const campIds = selectedGroupCluster.campaigns.map(c => c.id);
+                        setSelectedCampaignIds(campIds);
+                        setIsBulkEditOpen(true);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold transition-all cursor-pointer"
+                      title="Bulk edit all reels in this fleet"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Bulk Edit</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleGroupDelete(selectedGroupCluster.groupId, selectedGroupCluster.groupName)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all cursor-pointer"
+                      title="Delete this fleet and all its reels"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Delete Fleet</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Fleet Progress Bar */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-400">Overall Fleet Delivery:</span>
+                    <span className="text-purple-300 font-bold">{selectedGroupCluster.progressPct}% Complete</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                    <div
+                      className="h-full bg-gradient-to-r from-purple-500 via-fuchsia-500 to-cyan-400 transition-all duration-300"
+                      style={{ width: `${selectedGroupCluster.progressPct}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Fleet KPI Grid (Views, Likes, Comments, Saves, Shares, Reposts) */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-2 font-mono text-xs">
+                  {/* Views */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><Eye className="w-3 h-3 text-cyan-400" /> Views</span>
+                      <span className="text-cyan-400 font-bold">
+                        {selectedGroupCluster.totalViews > 0 ? Math.round((selectedGroupCluster.deliveredViews / selectedGroupCluster.totalViews) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredViews.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalViews.toLocaleString()} target
+                    </div>
+                  </div>
+
+                  {/* Likes */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><Heart className="w-3 h-3 text-pink-400" /> Likes</span>
+                      <span className="text-pink-400 font-bold">
+                        {selectedGroupCluster.totalLikes > 0 ? Math.round((selectedGroupCluster.deliveredLikes / selectedGroupCluster.totalLikes) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredLikes.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalLikes.toLocaleString()} target
+                    </div>
+                  </div>
+
+                  {/* Comments */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><MessageSquare className="w-3 h-3 text-purple-400" /> Comments</span>
+                      <span className="text-purple-400 font-bold">
+                        {selectedGroupCluster.totalComments > 0 ? Math.round((selectedGroupCluster.deliveredComments / selectedGroupCluster.totalComments) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredComments.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalComments.toLocaleString()} target
+                    </div>
+                  </div>
+
+                  {/* Saves */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><Bookmark className="w-3 h-3 text-amber-400" /> Saves</span>
+                      <span className="text-amber-400 font-bold">
+                        {selectedGroupCluster.totalSaves > 0 ? Math.round((selectedGroupCluster.deliveredSaves / selectedGroupCluster.totalSaves) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredSaves.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalSaves.toLocaleString()} target
+                    </div>
+                  </div>
+
+                  {/* Shares */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><Share2 className="w-3 h-3 text-emerald-400" /> Shares</span>
+                      <span className="text-emerald-400 font-bold">
+                        {selectedGroupCluster.totalShares > 0 ? Math.round((selectedGroupCluster.deliveredShares / selectedGroupCluster.totalShares) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredShares.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalShares.toLocaleString()} target
+                    </div>
+                  </div>
+
+                  {/* Reposts */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1"><Repeat className="w-3 h-3 text-indigo-400" /> Reposts</span>
+                      <span className="text-indigo-400 font-bold">
+                        {selectedGroupCluster.totalReposts > 0 ? Math.round((selectedGroupCluster.deliveredReposts / selectedGroupCluster.totalReposts) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white mt-1">
+                      {selectedGroupCluster.deliveredReposts.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      / {selectedGroupCluster.totalReposts.toLocaleString()} target
+                    </div>
+                  </div>
+                </div>
+
+                {/* Fleet Pacing & Next Dispatch Pulse */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-800/80 text-xs font-mono">
+                  <div className="flex items-center gap-3 text-slate-400">
+                    <span>Batches: <strong className="text-emerald-400">{selectedGroupCluster.completedBatches}</strong> delivered</span>
+                    <span>•</span>
+                    <span><strong className="text-cyan-400">{selectedGroupCluster.runningBatches}</strong> in-flight</span>
+                    <span>•</span>
+                    <span><strong className="text-slate-300">{selectedGroupCluster.pendingBatches}</strong> pending</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-purple-300">
+                    <Clock className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Next Fleet Dispatch: <strong>{selectedGroupCluster.nextBatchText}</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fleet Reels Live Matrix Table */}
+              <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-5 backdrop-blur-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-2 font-mono">
+                    <Layers className="w-4 h-4 text-purple-400" />
+                    <span>Fleet Reels Live Matrix ({selectedGroupCluster.campaigns.length} URLs)</span>
+                  </h4>
+                  <span className="text-[11px] font-mono text-slate-400">
+                    Click "Inspect Reel" to view execution feed & live SMM logs
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-800 rounded-lg max-h-[520px] scrollbar-thin scrollbar-thumb-purple-900/50 hover:scrollbar-thumb-purple-600/70 scrollbar-track-slate-950">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0 z-10 backdrop-blur-md">
+                      <tr>
+                        <th className="py-2.5 px-3"># & Handle</th>
+                        <th className="py-2.5 px-3">Target URL</th>
+                        <th className="py-2.5 px-3">Views Progress</th>
+                        <th className="py-2.5 px-3">Likes & Engagement</th>
+                        <th className="py-2.5 px-3 text-center">Status</th>
+                        <th className="py-2.5 px-3">Next Dispatch</th>
+                        <th className="py-2.5 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 bg-slate-950/60 text-slate-300">
+                      {selectedGroupCluster.campaigns.map((camp, idx) => {
+                        const campDeliveredViews = camp.batches
+                          .filter(b => b.status === 'success' || b.status === 'dispatched' || (b.orderIds?.views && !b.orderIds.views.startsWith('ERR')))
+                          .reduce((s, b) => s + (b.views || 0), 0);
+                        const campTargetViews = camp.metrics?.views || 0;
+                        const campProgress = campTargetViews > 0 ? Math.min(100, Math.round((campDeliveredViews / campTargetViews) * 100)) : 0;
+                        const campCountdown = getNextBatchCountdown(camp);
+
+                        return (
+                          <tr key={camp.id} className="hover:bg-slate-900/60 transition-colors">
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <span className="text-purple-400 font-bold">#{(camp.bulkIndex ?? idx) + 1}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-purple-900/40 text-purple-200 border border-purple-500/30 text-[10px] font-bold">
+                                  {camp.handle}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 max-w-[200px] truncate">
+                              <a
+                                href={camp.targetUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1 truncate"
+                                title={camp.targetUrl}
+                              >
+                                <span className="truncate">{camp.targetUrl}</span>
+                                <ExternalLink className="w-3 h-3 shrink-0" />
+                              </a>
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400"
+                                    style={{ width: `${campProgress}%` }}
+                                  />
+                                </div>
+                                <span className="font-bold text-white text-[11px]">
+                                  {campDeliveredViews.toLocaleString()} / {campTargetViews.toLocaleString()}
+                                </span>
+                                <span className="text-[10px] text-cyan-400">({campProgress}%)</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-slate-300 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <span className="text-pink-400 font-semibold">{camp.metrics?.likes || 0} likes</span>
+                                <span className="text-slate-600">•</span>
+                                <span className="text-purple-400">{camp.metrics?.comments || 0} comm</span>
+                                <span className="text-slate-600">•</span>
+                                <span className="text-amber-400">{camp.metrics?.saves || 0} saves</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                camp.status === 'running'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : camp.status === 'paused'
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                  : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                              }`}>
+                                {(camp.status || 'running').toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap text-slate-400 text-[11px]">
+                              {campCountdown.text}
+                            </td>
+                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCampaignId(camp.id);
+                                    setSelectedGroupId(null);
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 text-[10px] font-bold transition-all cursor-pointer"
+                                  title="Open full execution batch view for this reel"
+                                >
+                                  Inspect Reel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onFastForwardBatch(camp.id)}
+                                  className="p-1 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 border border-cyan-500/40 transition-all cursor-pointer"
+                                  title="Fast-forward next batch for this reel"
+                                >
+                                  <FastForward className="w-3 h-3" />
+                                </button>
+                                {camp.status === 'running' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onPauseCampaign(camp.id)}
+                                    className="p-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 border border-amber-500/40 transition-all cursor-pointer"
+                                    title="Pause this reel"
+                                  >
+                                    <Pause className="w-3 h-3" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => onResumeCampaign(camp.id)}
+                                    className="p-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40 transition-all cursor-pointer"
+                                    title="Resume this reel"
+                                  >
+                                    <Play className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : selectedCampaign ? (
+            <div className="lg:col-span-2 space-y-5 animate-fade-in">
+              {/* Breadcrumb banner if this reel is part of a fleet group */}
+              {selectedCampaign.groupId && (
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-gradient-to-r from-purple-950/60 to-slate-900 border border-purple-500/40 text-xs font-mono shadow-md animate-fade-in">
+                  <div className="flex items-center gap-2 text-purple-300">
+                    <Folder className="w-4 h-4 text-purple-400 shrink-0" />
+                    <span>
+                      Part of Fleet: <strong>{selectedCampaign.groupName || 'Bulk Fleet'}</strong> • Reel #{(selectedCampaign.bulkIndex ?? 0) + 1} of {selectedCampaign.bulkTotalCount || 'Fleet'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedGroupId(selectedCampaign.groupId!);
+                      setSelectedCampaignId(null);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white cursor-pointer font-bold transition-all text-xs shadow-sm shadow-purple-900/40"
+                  >
+                    <span>← Fleet Command Center</span>
+                  </button>
+                </div>
+              )}
+
               {/* Circuit Breaker Auto-Pause Outage Banner */}
               {selectedCampaign.status === 'paused' && selectedCampaign.lastAutoPause && (
                 <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-200 shadow-lg animate-fade-in font-mono">
@@ -1826,7 +2545,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 </div>
 
                 {/* Progress Stats Summary */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-800/80 font-mono text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 border-t border-slate-800/80 font-mono text-xs">
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                     <div className="text-[10px] text-slate-400">Batches Dispatched</div>
                     <div className="text-sm font-bold text-white">
@@ -1858,6 +2577,27 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                       {selectedCampaign.riskAudit?.riskCategory || 'Ghost-Grade'}
                     </div>
                   </div>
+
+                  {/* Direct Live Cost Card */}
+                  {(() => {
+                    const cCost = calculateCampaignCost(selectedCampaign, livePricing);
+                    const totalCostVal = selectedCampaign.estimatedCost ?? cCost.totalUsd;
+                    const totalCostInrVal = totalCostVal * (livePricing.usdToInr || 86.85);
+                    return (
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-emerald-500/30">
+                        <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                          <span>Direct Panel Cost</span>
+                          <span className="text-[9px] text-emerald-400 font-bold">Parent API</span>
+                        </div>
+                        <div className="text-sm font-bold text-emerald-300">
+                          {formatUsd(totalCostVal)}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {formatInr(totalCostInrVal)}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -1883,6 +2623,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                         <th className="py-2.5 px-3">Likes & Routing</th>
                         <th className="py-2.5 px-3">Engagement</th>
                         <th className="py-2.5 px-3">Live Order IDs</th>
+                        <th className="py-2.5 px-3 text-right">Cost</th>
                         <th className="py-2.5 px-3 text-center">Status</th>
                         <th className="py-2.5 px-3 text-center">Details</th>
                       </tr>
@@ -1980,6 +2721,9 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                               <span className="text-slate-500">Pending</span>
                             )}
                           </td>
+                          <td className="py-2.5 px-3 text-right font-mono text-emerald-300 font-semibold whitespace-nowrap">
+                            {formatUsd(batch.estimatedCost ?? calculateBatchCost(batch, livePricing))}
+                          </td>
                           <td className="py-2.5 px-3 text-center">
                             {batch.status === 'success' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold whitespace-nowrap">
@@ -1996,14 +2740,36 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                             )}
                           </td>
                           <td className="py-2.5 px-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => setInspectBatch(batch)}
-                              className="px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] transition-colors cursor-pointer"
-                              title="View Order Details & Execution Logs"
-                            >
-                              Logs
-                            </button>
+                            <div className="flex items-center justify-center gap-1.5">
+                              {batch.status === 'pending' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDispatchSingleBatch(selectedCampaign.id, batch.batchIndex)}
+                                    className="p-1 rounded bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 border border-cyan-500/40 text-[10px] transition-colors cursor-pointer"
+                                    title="Dispatch this specific batch immediately"
+                                  >
+                                    <Play className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRescheduleBatch(selectedCampaign.id, batch.batchIndex, 15)}
+                                    className="px-1.5 py-0.5 rounded bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 border border-purple-500/30 text-[10px] transition-colors cursor-pointer"
+                                    title="Nudge batch execution by +15 minutes"
+                                  >
+                                    +15m
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setInspectBatch(batch)}
+                                className="px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] transition-colors cursor-pointer"
+                                title="View Order Details & Execution Logs"
+                              >
+                                Logs
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2013,7 +2779,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -2043,7 +2809,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
               <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px] text-slate-400 space-y-1">
                 <div>URL: {campaignToDelete.targetUrl}</div>
                 <div>Batches: {campaignToDelete.batches.length} total</div>
-                <div>Status: {campaignToDelete.status.toUpperCase()}</div>
+                <div>Status: {(campaignToDelete.status || 'running').toUpperCase()}</div>
               </div>
               <p className="text-rose-300 text-[11px]">
                 This action cancels all remaining scheduled SMM batches and removes the campaign from the server.
@@ -2112,10 +2878,41 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
               {/* Order IDs Box */}
               <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Live SMM Panel Orders:</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Live SMM Panel Orders:</div>
+                  <span className="text-[10px] text-purple-400 font-mono">30-Day Drop Protection</span>
+                </div>
                 <div className="text-slate-300 space-y-1 text-[11px]">
-                  <div>Views (ReliableSMM #8024): <span className="text-emerald-400 font-bold">{inspectBatch.orderIds?.views || 'Pending'}</span></div>
-                  <div>Likes ({inspectBatch.likesProvider || 'Routing'}): <span className="text-pink-400 font-bold">{inspectBatch.orderIds?.likes || 'Pending'}</span></div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <div>Views (ReliableSMM #8024): <span className="text-emerald-400 font-bold">{inspectBatch.orderIds?.views || 'Pending'}</span></div>
+                    {inspectBatch.orderIds?.views && !inspectBatch.orderIds.views.startsWith('ERR') && (
+                      <button
+                        type="button"
+                        disabled={refillLoadingOrder === inspectBatch.orderIds.views}
+                        onClick={() => handleRequestRefill(inspectBatch.orderIds!.views, 'reliablesmm')}
+                        className="px-2 py-0.5 rounded bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold cursor-pointer transition-all disabled:opacity-50"
+                        title="Dispatch 30-day drop refill request via ReliableSMM"
+                      >
+                        {refillLoadingOrder === inspectBatch.orderIds.views ? 'Requesting...' : '↻ Refill'}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between py-0.5">
+                    <div>Likes ({inspectBatch.likesProvider || 'Routing'}): <span className="text-pink-400 font-bold">{inspectBatch.orderIds?.likes || 'Pending'}</span></div>
+                    {inspectBatch.orderIds?.likes && !inspectBatch.orderIds.likes.startsWith('ERR') && (
+                      <button
+                        type="button"
+                        disabled={refillLoadingOrder === inspectBatch.orderIds.likes}
+                        onClick={() => handleRequestRefill(inspectBatch.orderIds!.likes, inspectBatch.likesProvider === 'JAP_Micro' ? 'jap' : 'reliablesmm')}
+                        className="px-2 py-0.5 rounded bg-pink-600/25 hover:bg-pink-600/40 text-pink-300 border border-pink-500/30 text-[10px] font-bold cursor-pointer transition-all disabled:opacity-50"
+                        title="Dispatch 30-day drop refill request"
+                      >
+                        {refillLoadingOrder === inspectBatch.orderIds.likes ? 'Requesting...' : '↻ Refill'}
+                      </button>
+                    )}
+                  </div>
+
                   <div>Saves (ReliableSMM #7841): <span className="text-amber-400 font-bold">{inspectBatch.orderIds?.saves || 'Pending / None'}</span></div>
                   <div>Reposts (ReliableSMM #7842): <span className="text-indigo-400 font-bold">{inspectBatch.orderIds?.reposts || 'Pending / None'}</span></div>
                   <div>Shares (ReliableSMM #2060): <span className="text-emerald-400 font-bold">{inspectBatch.orderIds?.shares || 'Pending / None'}</span></div>
@@ -3320,6 +4117,233 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 className="px-4 py-1.5 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition-colors cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Client White-Label Proof-of-Work Report Modal */}
+      {isReportModalOpen && reportCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-3xl w-full shadow-2xl my-6 space-y-5 text-slate-100 max-h-[92vh] overflow-y-auto font-sans">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-purple-500/20">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Campaign Delivery Certificate & Audit</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono">
+                      Verified
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    White-label proof-of-work report for agency clients and creators
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono transition-all cursor-pointer"
+                  title="Print or Save as PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print / PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportClientCSV(reportCampaign)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 text-xs font-mono font-bold transition-all cursor-pointer"
+                  title="Export raw CSV report"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Client Campaign Summary Card */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 space-y-3 font-mono text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Creator Handle / Client</div>
+                  <div className="text-sm font-bold text-purple-300 mt-0.5">{reportCampaign.handle}</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5 truncate">{reportCampaign.name}</div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Target Destination</div>
+                  <a
+                    href={reportCampaign.targetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:underline flex items-center gap-1 mt-0.5 truncate font-semibold"
+                  >
+                    <span className="truncate">{reportCampaign.targetUrl}</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Platform: {(reportCampaign.platform || 'instagram').toUpperCase()}</div>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-900 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <span className="text-[10px] text-slate-500">Pacing Curve:</span>
+                  <div className="text-white font-bold capitalize">{reportCampaign.curve.replace('_', ' ')}</div>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500">Anti-Detection:</span>
+                  <div className="text-emerald-400 font-bold">±{reportCampaign.jitterPercent}% Jitter Safe</div>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500">Campaign Status:</span>
+                  <div className="text-cyan-400 font-bold uppercase">{reportCampaign.status}</div>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500">Launch Date:</span>
+                  <div className="text-slate-300">{new Date(reportCampaign.createdAt).toLocaleDateString()}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Metrics Matrix Table */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
+                Engagement Delivery Ledger
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 font-mono">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase">Views</div>
+                  <div className="text-base font-bold text-cyan-400 mt-0.5">
+                    {reportCampaign.batches
+                      .filter(b => b.status === 'success' || b.status === 'dispatched' || (b.orderIds?.views && !b.orderIds.views.startsWith('ERR')))
+                      .reduce((s, b) => s + b.views, 0)
+                      .toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Goal: {reportCampaign.metrics.views.toLocaleString()}</div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase">Likes</div>
+                  <div className="text-base font-bold text-pink-400 mt-0.5">
+                    {reportCampaign.batches
+                      .filter(b => b.status === 'success' || (b.orderIds?.likes && !b.orderIds.likes.startsWith('ERR')))
+                      .reduce((s, b) => s + b.likes, 0)
+                      .toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Goal: {reportCampaign.metrics.likes.toLocaleString()}</div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase">Comments</div>
+                  <div className="text-base font-bold text-purple-400 mt-0.5">
+                    {reportCampaign.metrics.comments}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Niche: {reportCampaign.commentNiche}</div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase">Shares</div>
+                  <div className="text-base font-bold text-emerald-400 mt-0.5">
+                    {reportCampaign.batches
+                      .filter(b => b.status === 'success' || (b.orderIds?.shares && !b.orderIds.shares.startsWith('ERR')))
+                      .reduce((s, b) => s + b.shares, 0)
+                      .toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Goal: {reportCampaign.metrics.shares}</div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase">Saves</div>
+                  <div className="text-base font-bold text-amber-400 mt-0.5">
+                    {reportCampaign.batches
+                      .filter(b => b.status === 'success' || (b.orderIds?.saves && !b.orderIds.saves.startsWith('ERR')))
+                      .reduce((s, b) => s + b.saves, 0)
+                      .toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Goal: {reportCampaign.metrics.saves}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Individual Batch Timeline Ledger */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
+                  Batch Execution Schedule ({reportCampaign.batches.length} Batches)
+                </h4>
+                <span className="text-[10px] font-mono text-emerald-400">
+                  Algorithm Pacing: Organic Monotonic Ramp
+                </span>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-800 rounded-xl max-h-56 scrollbar-thin scrollbar-thumb-purple-900/50 scrollbar-track-slate-950">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Batch</th>
+                      <th className="py-2 px-3">Scheduled Time</th>
+                      <th className="py-2 px-3">Views</th>
+                      <th className="py-2 px-3">Likes</th>
+                      <th className="py-2 px-3">Saves/Shares</th>
+                      <th className="py-2 px-3">Live SMM Order ID</th>
+                      <th className="py-2 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 bg-slate-950/60 text-slate-300">
+                    {reportCampaign.batches.map(b => (
+                      <tr key={b.batchIndex} className="hover:bg-slate-900/40">
+                        <td className="py-2 px-3 font-bold text-white">#{b.batchIndex}</td>
+                        <td className="py-2 px-3 text-slate-400 whitespace-nowrap">
+                          {new Date(b.scheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="py-2 px-3 text-cyan-300 font-semibold">{b.views.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-pink-300">{b.likes || '—'}</td>
+                        <td className="py-2 px-3 text-slate-400">
+                          {b.saves > 0 ? `${b.saves} saves` : ''} {b.shares > 0 ? `${b.shares} shares` : ''} {!b.saves && !b.shares ? '—' : ''}
+                        </td>
+                        <td className="py-2 px-3 font-mono text-[11px] text-emerald-400 truncate max-w-[150px]">
+                          {b.orderIds?.views ? `#${b.orderIds.views}` : 'Pending'}
+                        </td>
+                        <td className="py-2 px-3 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            b.status === 'success' ? 'bg-emerald-500/20 text-emerald-300' :
+                            b.status === 'running' ? 'bg-cyan-500/20 text-cyan-300 animate-pulse' :
+                            'bg-slate-800 text-slate-400'
+                          }`}>
+                            {(b.status || 'pending').toUpperCase()}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800 font-mono text-xs">
+              <div className="text-[11px] text-slate-400">
+                Generated via <strong className="text-slate-200">SMM Drip Engine 2.0</strong> • Certified Organic Delivery
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsReportModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-colors cursor-pointer"
+              >
+                Close Report
               </button>
             </div>
           </div>

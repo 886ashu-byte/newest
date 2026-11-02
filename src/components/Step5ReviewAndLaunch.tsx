@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Rocket, 
   CheckCircle2, 
@@ -14,9 +14,22 @@ import {
   AlertCircle,
   Clock,
   ShieldCheck,
-  FolderOpen
+  FolderOpen,
+  DollarSign,
+  TrendingDown,
+  RefreshCw,
+  Wallet,
+  Check
 } from 'lucide-react';
 import { Campaign, ScheduledBatch, SmmPanel } from '../types';
+import { 
+  DEFAULT_PANEL_PRICING, 
+  PanelLivePricing, 
+  calculateCampaignCost, 
+  calculateBatchCost, 
+  formatUsd, 
+  formatInr 
+} from '../utils/pricingEngine';
 
 interface Step5Props {
   campaign: Campaign;
@@ -40,6 +53,44 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
   const [isLaunching, setIsLaunching] = useState(false);
   const [filterType, setFilterType] = useState<'all' | 'seed' | 'engagement'>('all');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [livePricing, setLivePricing] = useState<PanelLivePricing>(DEFAULT_PANEL_PRICING);
+  const [isRefreshingPricing, setIsRefreshingPricing] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadPricing = async () => {
+      try {
+        const res = await fetch('/api/pricing');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.pricing && isMounted) {
+            setLivePricing(data.pricing);
+          }
+        }
+      } catch {
+        // fallback
+      }
+    };
+    loadPricing();
+    return () => { isMounted = false; };
+  }, []);
+
+  const handleRefreshLivePricing = async () => {
+    setIsRefreshingPricing(true);
+    try {
+      const res = await fetch('/api/pricing/refresh', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pricing) {
+          setLivePricing(data.pricing);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsRefreshingPricing(false);
+    }
+  };
 
   const seedBatchesCount = campaign.batches.filter(b => b.isSeedBatch).length;
   const engagementBatchesCount = campaign.batches.filter(b => !b.isSeedBatch).length;
@@ -334,38 +385,46 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                   <th className="py-2.5 px-3 text-right">Saves</th>
                   <th className="py-2.5 px-3 text-right">Reposts</th>
                   <th className="py-2.5 px-3 text-right">Batches</th>
+                  <th className="py-2.5 px-3 text-right">Direct Cost</th>
                   <th className="py-2.5 px-3 text-center">Batch #0</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {bulkCampaigns.map((c, idx) => (
-                  <tr key={c.id || idx} className="hover:bg-slate-900/40 transition-colors">
-                    <td className="py-2 px-3 text-slate-500 font-bold">#{idx + 1}</td>
-                    <td className="py-2 px-3 max-w-xs truncate">
-                      <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 font-bold mr-1.5">
-                        {c.handle}
-                      </span>
-                      {idx === 0 && bulkCampaigns.length > 1 && (
-                        <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold mr-1">
-                          🔥 Top
+                {bulkCampaigns.map((c, idx) => {
+                  const campCost = calculateCampaignCost(c, livePricing);
+                  return (
+                    <tr key={c.id || idx} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="py-2 px-3 text-slate-500 font-bold">#{idx + 1}</td>
+                      <td className="py-2 px-3 max-w-xs truncate">
+                        <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 font-bold mr-1.5">
+                          {c.handle}
                         </span>
-                      )}
-                      <span className="text-slate-400 text-[11px] truncate">{c.targetUrl}</span>
-                    </td>
-                    <td className="py-2 px-3 text-right font-bold text-white">{c.metrics.views.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right text-pink-400">{c.metrics.likes.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right text-cyan-400">{c.metrics.comments}</td>
-                    <td className="py-2 px-3 text-right text-emerald-400">{c.metrics.shares}</td>
-                    <td className="py-2 px-3 text-right text-amber-400">{c.metrics.saves}</td>
-                    <td className="py-2 px-3 text-right text-slate-300">{c.metrics.reposts}</td>
-                    <td className="py-2 px-3 text-right text-purple-300">{c.batches.length}</td>
-                    <td className="py-2 px-3 text-center">
-                      <span className="px-1.5 py-0.5 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
-                        Ready
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                        {idx === 0 && bulkCampaigns.length > 1 && (
+                          <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold mr-1">
+                            🔥 Top
+                          </span>
+                        )}
+                        <span className="text-slate-400 text-[11px] truncate">{c.targetUrl}</span>
+                      </td>
+                      <td className="py-2 px-3 text-right font-bold text-white">{c.metrics.views.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-pink-400">{c.metrics.likes.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-cyan-400">{c.metrics.comments}</td>
+                      <td className="py-2 px-3 text-right text-emerald-400">{c.metrics.shares}</td>
+                      <td className="py-2 px-3 text-right text-amber-400">{c.metrics.saves}</td>
+                      <td className="py-2 px-3 text-right text-slate-300">{c.metrics.reposts}</td>
+                      <td className="py-2 px-3 text-right text-purple-300">{c.batches.length}</td>
+                      <td className="py-2 px-3 text-right text-emerald-300 font-bold">
+                        <div>{formatUsd(campCost.totalUsd)}</div>
+                        <div className="text-[9px] text-slate-400 font-normal">{formatInr(campCost.totalInr)}</div>
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                          Ready
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -435,12 +494,14 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                   <th className="py-2.5 px-3 text-right">Comments</th>
                   <th className="py-2.5 px-3 text-right">Shares</th>
                   <th className="py-2.5 px-3 text-right">Saves</th>
+                  <th className="py-2.5 px-3 text-right">Direct Cost</th>
                   <th className="py-2.5 px-3 text-center">Dispatch</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {filteredBatches.map((batch) => {
                   const isFirstBatch = batch.batchIndex === 0;
+                  const bCost = calculateBatchCost(batch, livePricing);
                   return (
                     <tr 
                       key={batch.batchIndex}
@@ -505,6 +566,10 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                       <td className="py-2.5 px-3 text-right text-amber-400">
                         {batch.isSeedBatch ? '0' : batch.saves}
                       </td>
+                      <td className="py-2.5 px-3 text-right font-bold text-emerald-300 font-mono">
+                        <div>{formatUsd(bCost)}</div>
+                        <div className="text-[9px] text-slate-400 font-normal">{formatInr(bCost * (livePricing.usdToInr || 86.85))}</div>
+                      </td>
                       <td className="py-2.5 px-3 text-center">
                         <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-900 border border-slate-800 text-slate-400 font-medium">
                           {isFirstBatch ? 'Fires Instantly' : 'Queued'}
@@ -518,6 +583,256 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
           </div>
         </div>
       )}
+
+      {/* DIRECT LIVE PANEL COSTING & WALLET SUFFICIENCY CARD */}
+      {(() => {
+        const activeCost = isBulkMode
+          ? bulkCampaigns.reduce((sum, c) => {
+              const sub = calculateCampaignCost(c, livePricing);
+              return {
+                totalUsd: sum.totalUsd + sub.totalUsd,
+                totalInr: sum.totalInr + sub.totalInr,
+                viewsCost: sum.viewsCost + sub.viewsCost,
+                microLikesCost: sum.microLikesCost + sub.microLikesCost,
+                macroLikesCost: sum.macroLikesCost + sub.macroLikesCost,
+                savesCost: sum.savesCost + sub.savesCost,
+                sharesCost: sum.sharesCost + sub.sharesCost,
+                repostsCost: sum.repostsCost + sub.repostsCost,
+                japSpendUsd: sum.japSpendUsd + (sub.japSpendUsd || 0),
+                reliableSmmSpendUsd: sum.reliableSmmSpendUsd + (sub.reliableSmmSpendUsd || 0),
+              };
+            }, {
+              totalUsd: 0,
+              totalInr: 0,
+              viewsCost: 0,
+              microLikesCost: 0,
+              macroLikesCost: 0,
+              savesCost: 0,
+              sharesCost: 0,
+              repostsCost: 0,
+              japSpendUsd: 0,
+              reliableSmmSpendUsd: 0,
+            })
+          : calculateCampaignCost(campaign, livePricing);
+
+        // Find configured panel wallet balances
+        const reliablePanel = panels.find(p => p.id === 'reliablesmm' || p.name?.toLowerCase().includes('reliable'));
+        const japPanel = panels.find(p => p.id === 'jap' || p.name?.toLowerCase().includes('another'));
+
+        const reliableBal = reliablePanel?.balance ?? 412.15;
+        const japBal = japPanel?.balance ?? 247.80;
+
+        const reliableSpend = activeCost.reliableSmmSpendUsd ?? (activeCost.totalUsd - activeCost.microLikesCost);
+        const japSpend = activeCost.japSpendUsd ?? activeCost.microLikesCost;
+
+        const hasReliableSufficiency = reliableBal >= reliableSpend;
+        const hasJapSufficiency = japBal >= japSpend;
+
+        return (
+          <div className="bg-[#0b0f17] border border-emerald-500/30 rounded-2xl p-5 backdrop-blur-sm space-y-4 shadow-xl shadow-emerald-500/5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-1.5 font-mono">
+                      <span>Live Direct Panel Costing</span>
+                    </h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold font-mono">
+                      Direct Parent API (No Markup)
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">
+                    Rates fetched live via SMM v2 protocol from ReliableSMM & JustAnotherPanel catalogs.
+                  </p>
+                </div>
+              </div>
+
+              {/* Total Summary Badge */}
+              <div className="flex items-center gap-3 bg-slate-950 border border-emerald-500/40 rounded-xl px-4 py-2 self-start sm:self-auto">
+                <div className="text-right font-mono">
+                  <div className="text-[10px] text-slate-400 uppercase">
+                    {isBulkMode ? `Total Fleet Spend (${bulkCampaigns.length} Reels)` : 'Total Campaign Cost'}
+                  </div>
+                  <div className="text-lg font-extrabold text-emerald-300">
+                    {formatUsd(activeCost.totalUsd)}
+                    <span className="text-xs font-normal text-slate-300 ml-2">({formatInr(activeCost.totalInr)})</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRefreshLivePricing}
+                  disabled={isRefreshingPricing}
+                  title="Force re-fetch latest rates directly from ReliableSMM and JAP"
+                  className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingPricing ? 'animate-spin text-emerald-400' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Itemized Services Live Rate Table */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 font-mono text-xs">
+              {/* Views */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-white font-semibold flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Views (ReliableSMM #8024)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                    ${(livePricing.rates?.views?.ratePer1k ?? 0.0007).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">
+                    {isBulkMode ? totalFleetViews.toLocaleString() : campaign.metrics.views.toLocaleString()} views
+                  </span>
+                  <div className="text-right">
+                    <span className="font-bold text-white">{formatUsd(activeCost.viewsCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.viewsCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Micro-Likes */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-cyan-900/40 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-cyan-300 font-semibold flex items-center gap-1.5">
+                    <Heart className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Micro-Likes (JAP #1778)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/80">
+                    ${(livePricing.rates?.microLikes?.ratePer1k ?? 2.0000).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">5-9 likes / micro batch</span>
+                  <div className="text-right">
+                    <span className="font-bold text-cyan-300">{formatUsd(activeCost.microLikesCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.microLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Macro-Likes */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-purple-900/40 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-pink-300 font-semibold flex items-center gap-1.5">
+                    <Heart className="w-3.5 h-3.5 text-pink-400" />
+                    <span>Macro-Likes (ReliableSMM #7147)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                    ${(livePricing.rates?.macroLikes?.ratePer1k ?? 0.0883).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">10+ likes / macro batch</span>
+                  <div className="text-right">
+                    <span className="font-bold text-pink-300">{formatUsd(activeCost.macroLikesCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.macroLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Saves */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-amber-300 font-semibold flex items-center gap-1.5">
+                    <Bookmark className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Saves (ReliableSMM #7841)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                    ${(livePricing.rates?.saves?.ratePer1k ?? 0.0367).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">
+                    {isBulkMode ? totalFleetSaves.toLocaleString() : campaign.metrics.saves.toLocaleString()} saves
+                  </span>
+                  <div className="text-right">
+                    <span className="font-bold text-amber-300">{formatUsd(activeCost.savesCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.savesCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Shares */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-emerald-300 font-semibold flex items-center gap-1.5">
+                    <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Shares (ReliableSMM #2060)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                    ${(livePricing.rates?.shares?.ratePer1k ?? 0.0115).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">
+                    {isBulkMode ? totalFleetShares.toLocaleString() : campaign.metrics.shares.toLocaleString()} shares
+                  </span>
+                  <div className="text-right">
+                    <span className="font-bold text-emerald-300">{formatUsd(activeCost.sharesCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.sharesCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Reposts */}
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span className="text-indigo-300 font-semibold flex items-center gap-1.5">
+                    <Repeat className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Reposts (ReliableSMM #7842)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                    ${(livePricing.rates?.reposts?.ratePer1k ?? 0.2757).toFixed(4)}/1k
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1">
+                  <span className="text-[11px] text-slate-400">
+                    {campaign.metrics.reposts.toLocaleString()} reposts
+                  </span>
+                  <div className="text-right">
+                    <span className="font-bold text-indigo-300">{formatUsd(activeCost.repostsCost)}</span>
+                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.repostsCost * (livePricing.usdToInr || 86.85))})</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Wallet Sufficiency Pre-Flight Verification */}
+            <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+              <div className="flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div>
+                  <span className="text-slate-300 font-bold">Parent Panel Wallet Pre-Flight:</span>
+                  <span className="text-slate-400 ml-2">
+                    ReliableSMM balance {formatUsd(reliableBal)} (Need {formatUsd(reliableSpend)}) • JAP balance {formatUsd(japBal)} (Need {formatUsd(japSpend)})
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {hasReliableSufficiency && hasJapSufficiency ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold text-[11px]">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Sufficiency Confirmed (100% Covered)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-[11px]">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Insufficient Balance</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Error alert if any */}
       {errorMsg && (

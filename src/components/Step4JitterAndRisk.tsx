@@ -52,6 +52,7 @@ interface Step4Props {
   batches?: ScheduledBatch[];
   curvePoints?: CurvePoint[];
   bezierPoints?: BezierControlPoints;
+  japEnabled?: boolean;
 }
 
 export const Step4JitterAndRisk: React.FC<Step4Props> = ({
@@ -70,6 +71,7 @@ export const Step4JitterAndRisk: React.FC<Step4Props> = ({
   batches: propBatches,
   curvePoints,
   bezierPoints,
+  japEnabled = true,
 }) => {
   const [isJitterEnabled, setIsJitterEnabled] = useState(true);
   const [intensityMode, setIntensityMode] = useState<'Subtle' | 'Balanced' | 'Wild'>('Balanced');
@@ -80,9 +82,11 @@ export const Step4JitterAndRisk: React.FC<Step4Props> = ({
   const [aiVerdict, setAiVerdict] = useState<string>(
     'Heuristic anti-detection check passed. High-retention views (ReliableSMM #8024) paired with dynamic micro-variances and seed chunk warmup simulate genuine user viewing patterns.'
   );
-  const [aiTips, setAiTips] = useState<string[]>([
+  const [aiTips, setAiTips] = useState<string[]>(() => [
     'Seed warmup phase (Batches #0 & #1) successfully establishes initial Reel view count before engagement unlocks.',
-    'Micro-likes (<10) route to JAP #1778, while macro-likes (10+) route to ReliableSMM #7147.',
+    japEnabled !== false
+      ? 'Micro-likes (<10) route to JAP #1778, while macro-likes (10+) route to ReliableSMM #7147.'
+      : 'All likes route 100% through ReliableSMM #7147 in a clean 10+ matrix with Golden Ratio percentages.',
     'Saves (ReliableSMM #7841) and Shares (ReliableSMM #2060) are synchronized with view density waves.'
   ]);
 
@@ -113,6 +117,7 @@ export const Step4JitterAndRisk: React.FC<Step4Props> = ({
       routingConfig: DEFAULT_ROUTING_CONFIG,
       curvePoints,
       region: audienceRegion,
+      japEnabled,
     });
   }, [
     metrics, 
@@ -125,7 +130,8 @@ export const Step4JitterAndRisk: React.FC<Step4Props> = ({
     seedChunkProtocol, 
     curvePoints, 
     audienceRegion, 
-    varianceSeed
+    varianceSeed,
+    japEnabled
   ]);
 
   // Compute live timeline batches to show

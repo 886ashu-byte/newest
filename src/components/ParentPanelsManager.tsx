@@ -10,7 +10,8 @@ import {
   Edit3, 
   CheckCircle2, 
   AlertCircle, 
-  Globe
+  Globe,
+  Power
 } from 'lucide-react';
 import { SmmPanel } from '../types';
 
@@ -129,6 +130,25 @@ export const ParentPanelsManager: React.FC<ParentPanelsManagerProps> = ({
     setPanels(prev => prev.filter(p => p.id !== id));
   };
 
+  const handleTogglePanelStatus = async (panel: SmmPanel) => {
+    try {
+      const res = await fetch(`/api/panels/${panel.id}/toggle-status`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.panels) setPanels(data.panels);
+        else if (data.panel) {
+          setPanels(prev => prev.map(p => p.id === data.panel.id ? data.panel : p));
+        }
+      } else {
+        const newStatus = panel.status === 'disabled' ? 'active' : 'disabled';
+        setPanels(prev => prev.map(p => p.id === panel.id ? { ...p, status: newStatus, enabled: newStatus === 'active' } : p));
+      }
+    } catch (e) {
+      const newStatus = panel.status === 'disabled' ? 'active' : 'disabled';
+      setPanels(prev => prev.map(p => p.id === panel.id ? { ...p, status: newStatus, enabled: newStatus === 'active' } : p));
+    }
+  };
+
   const handleTestConnection = async (panel: SmmPanel) => {
     setTestingPanelId(panel.id);
     setTestResult(null);
@@ -225,6 +245,19 @@ export const ParentPanelsManager: React.FC<ParentPanelsManagerProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleTogglePanelStatus(panel)}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      panel.enabled !== false && panel.status !== 'disabled'
+                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30'
+                    }`}
+                    title={panel.enabled !== false && panel.status !== 'disabled' ? 'Provider is ON. Click to Turn OFF.' : 'Provider is TURNED OFF. Click to Turn ON.'}
+                  >
+                    <Power className="w-3 h-3" />
+                    <span>{panel.enabled !== false && panel.status !== 'disabled' ? 'ON' : 'OFF'}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => openEditModal(panel)}

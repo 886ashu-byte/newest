@@ -8,6 +8,7 @@ export type AudienceRegion =
   | 'global';
 
 export type AlgorithmicCurve = 
+  | 'organic_ramp'
   | 'explore_push' 
   | 'fyp_waves' 
   | 'trending_rocket' 
@@ -148,6 +149,7 @@ export interface ScheduledBatch {
   executionLogs?: string[];
   gapMinutes?: number;
   gapText?: string;
+  estimatedCost?: number;
 }
 
 export interface AlgorithmicRiskAudit {
@@ -199,6 +201,8 @@ export interface Campaign {
   currentBatchIndex: number;
   riskAudit: AlgorithmicRiskAudit;
   routingConfig: ProviderRoutingConfig;
+  estimatedCost?: number;
+  costBreakdown?: CostBreakdown;
   groupId?: string; // Group ID if created as part of a bulk fleet campaign
   groupName?: string; // Human-readable group / fleet name
   bulkIndex?: number; // 0-based index within the bulk group
@@ -268,11 +272,54 @@ export interface SmmPanel {
   currency: 'USD' | 'INR';
   balance: number;
   lastChecked?: string;
-  status: 'active' | 'error' | 'untested';
+  status: 'active' | 'disabled' | 'error' | 'untested';
+  enabled?: boolean;
   isDefault?: boolean;
   latencyMs?: number;
   supportedServicesCount?: number;
   notes?: string;
+}
+
+export interface RoutingGateConfig {
+  mode: 'smart_split' | 'single_reliable' | 'single_jap' | 'custom';
+  microLikesThreshold: number; // default 10
+  microLikes: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+    maxQuantity: number;
+  };
+  macroLikes: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+  };
+  views: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+  };
+  saves: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+  };
+  shares: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+  };
+  reposts: {
+    providerId: string;
+    serviceId: number;
+    serviceName: string;
+    minQuantity: number;
+  };
 }
 
 export interface DispatchLog {
@@ -289,4 +336,56 @@ export interface DispatchLog {
   orderId?: string;
   responsePayload: any;
   error?: string;
+  cost?: number;
+}
+
+export interface ServiceRate {
+  serviceId: number;
+  serviceName: string;
+  providerId: string;
+  providerName: string;
+  ratePer1k: number;
+  minQuantity: number;
+  maxQuantity?: number;
+  currency: 'USD' | 'INR';
+  lastChecked?: string;
+  isLive?: boolean;
+}
+
+export interface PanelLivePricing {
+  rates: {
+    views: ServiceRate;
+    microLikes: ServiceRate;
+    macroLikes: ServiceRate;
+    saves: ServiceRate;
+    shares: ServiceRate;
+    reposts: ServiceRate;
+  };
+  tiktokRates?: {
+    views: ServiceRate;
+    likes: ServiceRate;
+    shares: ServiceRate;
+    saves: ServiceRate;
+    comments: ServiceRate;
+  };
+  usdToInr: number;
+  lastFetchedAt: string;
+  isLive: boolean;
+}
+
+export interface CostBreakdown {
+  viewsCost: number;
+  microLikesCost: number;
+  macroLikesCost: number;
+  totalLikesCost: number;
+  savesCost: number;
+  sharesCost: number;
+  repostsCost: number;
+  commentsCost?: number;
+  totalCostUsd: number;
+  totalCostInr: number;
+  totalUsd: number;
+  totalInr: number;
+  japSpendUsd?: number;
+  reliableSmmSpendUsd?: number;
 }

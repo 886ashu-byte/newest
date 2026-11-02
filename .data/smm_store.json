@@ -10,8 +10,8 @@
       "balance": 412.15,
       "status": "active",
       "isDefault": true,
-      "lastChecked": "2026-10-25T18:00:00.000Z",
-      "supportedServicesCount": 3100,
+      "lastChecked": "2026-11-02T06:19:02.286Z",
+      "supportedServicesCount": 4096,
       "notes": "Primary provider for Views (Service 8024), Macro-Likes (7147), Saves (7841), Reposts (7842), Shares (2060)"
     },
     {
@@ -23,9 +23,10 @@
       "balance": 247.8,
       "status": "active",
       "isDefault": true,
-      "lastChecked": "2026-10-25T18:00:00.000Z",
-      "supportedServicesCount": 2890,
-      "notes": "Micro-Likes specialist (Service 1778, 5-9 likes micro-drip) & Custom Engagement"
+      "lastChecked": "2026-11-02T06:19:15.510Z",
+      "supportedServicesCount": 5780,
+      "notes": "Micro-Likes specialist (Service 1778, 5-9 likes micro-drip) & Custom Engagement",
+      "enabled": true
     }
   ],
   "dispatchLogs": [
@@ -61,5 +62,125 @@
         "order": 8876806
       }
     }
-  ]
+  ],
+  "routingGateConfig": {
+    "mode": "smart_split",
+    "microLikesThreshold": 10,
+    "microLikes": {
+      "providerId": "jap",
+      "serviceId": 1778,
+      "serviceName": "Instagram Micro-Likes [5-9 Drip]",
+      "minQuantity": 5,
+      "maxQuantity": 9
+    },
+    "macroLikes": {
+      "providerId": "reliablesmm",
+      "serviceId": 7147,
+      "serviceName": "Instagram Macro-Likes [Active Profile Drip]",
+      "minQuantity": 10
+    },
+    "views": {
+      "providerId": "reliablesmm",
+      "serviceId": 8024,
+      "serviceName": "Instagram High-Retention Views",
+      "minQuantity": 100
+    },
+    "saves": {
+      "providerId": "reliablesmm",
+      "serviceId": 7841,
+      "serviceName": "Targeted Saves [Organic Signal]",
+      "minQuantity": 1
+    },
+    "shares": {
+      "providerId": "reliablesmm",
+      "serviceId": 2060,
+      "serviceName": "Viral Social Shares",
+      "minQuantity": 10
+    },
+    "reposts": {
+      "providerId": "reliablesmm",
+      "serviceId": 7842,
+      "serviceName": "Targeted Reposts / Shares v2",
+      "minQuantity": 1
+    }
+  },
+  "livePanelPricing": {
+    "rates": {
+      "views": {
+        "serviceId": 8024,
+        "serviceName": "Instagram Video Views [ Max Unlimited ] | All Link | Instant Start | No Refill ⚠️ | Day 100K 🚀",
+        "providerId": "reliablesmm",
+        "providerName": "ReliableSMM Enterprise",
+        "ratePer1k": 0.0007,
+        "minQuantity": 100,
+        "maxQuantity": 2147483647,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.036Z"
+      },
+      "microLikes": {
+        "serviceId": 1778,
+        "serviceName": "Instagram Likes [30K] [REAL ] [1H - 1k/Day] 💧⚡",
+        "providerId": "jap",
+        "providerName": "Just Another Panel (JAP)",
+        "ratePer1k": 2,
+        "minQuantity": 5,
+        "maxQuantity": 50000,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.036Z"
+      },
+      "macroLikes": {
+        "serviceId": 7147,
+        "serviceName": "Instagram Likes [ Max Unlimited ] | Real Accounts | Non Drop | Lifetime ♻️ | Superinstant | Day 300K 🚀",
+        "providerId": "reliablesmm",
+        "providerName": "ReliableSMM Enterprise",
+        "ratePer1k": 0.0883,
+        "minQuantity": 10,
+        "maxQuantity": 1000000,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.036Z"
+      },
+      "saves": {
+        "serviceId": 7841,
+        "serviceName": "Instagram Saves [ Max 100M ] | HQ Accounts | Cancel Enable | No Refill ⚠️ | Instant Start | Day 500K 🚀",
+        "providerId": "reliablesmm",
+        "providerName": "ReliableSMM Enterprise",
+        "ratePer1k": 0.0367,
+        "minQuantity": 1,
+        "maxQuantity": 100000000,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.036Z"
+      },
+      "shares": {
+        "serviceId": 2060,
+        "serviceName": "Instagram Share [ Max 10M ] | Instant | Super Fast Completed ⚡",
+        "providerId": "reliablesmm",
+        "providerName": "ReliableSMM Enterprise",
+        "ratePer1k": 0.0115,
+        "minQuantity": 10,
+        "maxQuantity": 2147483647,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.037Z"
+      },
+      "reposts": {
+        "serviceId": 7842,
+        "serviceName": "Instagram Reposts [ Max 10M ] | HQ Accounts | Cancel Enable | No Refill ⚠️ | Instant Start | Day 500K 🚀",
+        "providerId": "reliablesmm",
+        "providerName": "ReliableSMM Enterprise",
+        "ratePer1k": 0.2757,
+        "minQuantity": 1,
+        "maxQuantity": 10000000,
+        "currency": "USD",
+        "isLive": true,
+        "lastChecked": "2026-11-02T06:19:03.037Z"
+      }
+    },
+    "usdToInr": 86.85,
+    "lastFetchedAt": "2026-11-02T06:19:03.037Z",
+    "isLive": true
+  }
 }

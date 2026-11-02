@@ -59,13 +59,13 @@ export const Step3CurveAndDuration: React.FC<Step3Props> = ({
 
   // Local control points state if not provided via props
   const [internalPoints, setInternalPoints] = useState<CurvePoint[]>([
-    { id: 0, x: 0.05, y: 0.12 },
-    { id: 1, x: 0.16, y: 0.16 },
-    { id: 2, x: 0.32, y: 0.32 },
-    { id: 3, x: 0.50, y: 0.55 },
-    { id: 4, x: 0.68, y: 0.88 },
-    { id: 5, x: 0.84, y: 0.45 },
-    { id: 6, x: 0.95, y: 0.20 },
+    { id: 0, x: 0, y: 0.08 },
+    { id: 1, x: 0.16, y: 0.15 },
+    { id: 2, x: 0.33, y: 0.28 },
+    { id: 3, x: 0.50, y: 0.52 },
+    { id: 4, x: 0.68, y: 0.82 },
+    { id: 5, x: 0.84, y: 0.96 },
+    { id: 6, x: 1, y: 0.72 },
   ]);
 
   const activePoints = propCurvePoints || internalPoints;

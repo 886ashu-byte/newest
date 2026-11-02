@@ -368,12 +368,14 @@ export default function App() {
           <ActiveSchedulerView
             campaigns={campaigns}
             setCampaigns={setCampaigns}
+            panels={panels}
             onFastForwardBatch={handleFastForwardBatch}
             onPauseCampaign={handlePauseCampaign}
             onResumeCampaign={handleResumeCampaign}
             onDeleteCampaign={handleDeleteCampaign}
             onEditCampaign={handleEditCampaign}
             onCloneCampaign={handleCloneCampaign}
+            onNavigateToWizard={() => setActiveTab('wizard')}
           />
         )}
       </main>

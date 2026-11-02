@@ -3,6 +3,49 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Browser Extension & Environment Compatibility Shield
+      // Fixes Chrome extensions attempting to monkeypatch window.fetch when it has only a getter
+      (function() {
+        try {
+          var originalFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+          var currentFetch = originalFetch;
+
+          var descriptor = {
+            get: function() {
+              return currentFetch;
+            },
+            set: function(fn) {
+              currentFetch = fn;
+            },
+            configurable: true,
+            enumerable: true
+          };
+
+          try {
+            Object.defineProperty(window, 'fetch', descriptor);
+          } catch (_) {}
+
+          try {
+            if (typeof Window !== 'undefined' && Window.prototype) {
+              Object.defineProperty(Window.prototype, 'fetch', descriptor);
+            }
+          } catch (_) {}
+        } catch (e) {}
+
+        // Suppress external browser extension unhandled exceptions from crashing AI Studio runtime
+        window.addEventListener('error', function(event) {
+          if (event && event.filename && (
+            event.filename.indexOf('chrome-extension://') !== -1 ||
+            event.filename.indexOf('moz-extension://') !== -1
+          )) {
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
     <title>SMM Algorithmic Drip & Anti-Detection Automation Engine</title>
     <meta name="description" content="Enterprise-grade 24/7 SMM autonomous campaign scheduler featuring anti-detection algorithmic curves, multi-provider SMM v2 protocol routing gateway, jitter variance, and parent panel management." />
     <meta property="og:title" content="SMM Algorithmic Drip & Anti-Detection Automation Engine" />

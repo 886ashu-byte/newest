@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Workflow, 
   ArrowRight, 
@@ -13,67 +13,342 @@ import {
   Code2, 
   Layers,
   ShieldCheck,
-  Server
+  Server,
+  Power,
+  Sliders,
+  Save,
+  AlertTriangle,
+  RotateCcw,
+  RefreshCw,
+  DollarSign
 } from 'lucide-react';
-import { DEFAULT_ROUTING_CONFIG } from '../utils/algorithmicEngine';
+import { RoutingGateConfig, SmmPanel, PanelLivePricing } from '../types';
+import { DEFAULT_PANEL_PRICING, formatUsd, formatInr } from '../utils/pricingEngine';
 
 export const RoutingGatewayView: React.FC = () => {
+  // Direct Panel Live Pricing state
+  const [pricing, setPricing] = useState<PanelLivePricing>(DEFAULT_PANEL_PRICING);
+  const [isRefreshingPricing, setIsRefreshingPricing] = useState(false);
+  const [pricingRefreshMsg, setPricingRefreshMsg] = useState<string | null>(null);
+
+  // Provider gate state
+  const [panels, setPanels] = useState<SmmPanel[]>([
+    {
+      id: 'reliablesmm',
+      name: 'ReliableSMM Enterprise',
+      apiUrl: 'https://reliablesmm.com/api/v2',
+      apiKey: '••••••••',
+      currency: 'USD',
+      balance: 412.15,
+      status: 'active',
+      enabled: true
+    },
+    {
+      id: 'jap',
+      name: 'Just Another Panel (JAP)',
+      apiUrl: 'https://justanotherpanel.com/api/v2',
+      apiKey: '••••••••',
+      currency: 'USD',
+      balance: 247.80,
+      status: 'active',
+      enabled: true
+    }
+  ]);
+
+  const [routingConfig, setRoutingConfig] = useState<RoutingGateConfig>({
+    mode: 'smart_split',
+    microLikesThreshold: 10,
+    microLikes: {
+      providerId: 'jap',
+      serviceId: 1778,
+      serviceName: 'Instagram Micro-Likes [5-9 Drip]',
+      minQuantity: 5,
+      maxQuantity: 9
+    },
+    macroLikes: {
+      providerId: 'reliablesmm',
+      serviceId: 7147,
+      serviceName: 'Instagram Macro-Likes [Active Profile Drip]',
+      minQuantity: 10
+    },
+    views: {
+      providerId: 'reliablesmm',
+      serviceId: 8024,
+      serviceName: 'Instagram High-Retention Views',
+      minQuantity: 100
+    },
+    saves: {
+      providerId: 'reliablesmm',
+      serviceId: 7841,
+      serviceName: 'Targeted Saves [Organic Signal]',
+      minQuantity: 1
+    },
+    shares: {
+      providerId: 'reliablesmm',
+      serviceId: 2060,
+      serviceName: 'Viral Social Shares',
+      minQuantity: 10
+    },
+    reposts: {
+      providerId: 'reliablesmm',
+      serviceId: 7842,
+      serviceName: 'Targeted Reposts / Shares v2',
+      minQuantity: 1
+    }
+  });
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+
+  // Simulator state
   const [testMetric, setTestMetric] = useState<'views' | 'micro_likes' | 'macro_likes' | 'saves' | 'shares' | 'reposts'>('micro_likes');
   const [testQuantity, setTestQuantity] = useState<number>(7);
-  const [testLink, setTestLink] = useState('');
+  const [testLink, setTestLink] = useState('https://www.instagram.com/reel/C89viralXYZ/');
   const [dispatchResult, setDispatchResult] = useState<any | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
 
-  // Compute live routing decision
+  // Fetch current routing configuration and panel statuses from server
+  const fetchRoutingData = async () => {
+    try {
+      const res = await fetch('/api/routing-config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.routingGateConfig) setRoutingConfig(data.routingGateConfig);
+        if (Array.isArray(data.panels)) {
+          setPanels(prev => prev.map(p => {
+            const found = data.panels.find((dp: any) => dp.id === p.id);
+            return found ? { ...p, ...found } : p;
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('Routing fetch note:', e);
+    }
+  };
+
+  // Fetch live pricing directly from parent panels
+  const fetchPricingData = async () => {
+    try {
+      const res = await fetch('/api/pricing');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.rates) setPricing(data);
+      }
+    } catch (e) {
+      console.warn('Pricing fetch note:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchRoutingData();
+    fetchPricingData();
+  }, []);
+
+  // Force re-fetch rates directly from ReliableSMM and JAP parent panels
+  const handleRefreshPricingDirect = async () => {
+    setIsRefreshingPricing(true);
+    setPricingRefreshMsg(null);
+    try {
+      const res = await fetch('/api/pricing/refresh', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pricing) setPricing(data.pricing);
+        setPricingRefreshMsg('Live rates verified directly from panel APIs!');
+        setTimeout(() => setPricingRefreshMsg(null), 4000);
+      }
+    } catch (e: any) {
+      setPricingRefreshMsg('Failed to refresh pricing from panels');
+    } finally {
+      setIsRefreshingPricing(false);
+    }
+  };
+
+  // Toggle Provider ON / OFF
+  const handleToggleProvider = async (panelId: string) => {
+    try {
+      const res = await fetch(`/api/panels/${panelId}/toggle-status`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.panels) setPanels(data.panels);
+        else if (data.panel) {
+          setPanels(prev => prev.map(p => p.id === data.panel.id ? data.panel : p));
+        }
+        if (data.routingGateConfig) {
+          setRoutingConfig(data.routingGateConfig);
+        }
+        setSaveSuccessMsg(data.message || 'Provider status updated!');
+        setTimeout(() => setSaveSuccessMsg(null), 3500);
+      }
+    } catch (e) {
+      setPanels(prev => prev.map(p => {
+        if (p.id === panelId) {
+          const newEn = p.enabled === false;
+          return { ...p, enabled: newEn, status: newEn ? 'active' : 'disabled' };
+        }
+        return p;
+      }));
+    }
+  };
+
+  // Quick Preset Handlers
+  const handleApplyPreset = (preset: 'smart_split' | 'single_reliable' | 'single_jap') => {
+    if (preset === 'smart_split') {
+      setRoutingConfig(prev => ({
+        ...prev,
+        mode: 'smart_split',
+        microLikesThreshold: 10,
+        microLikes: {
+          ...prev.microLikes,
+          providerId: 'jap',
+          serviceId: 1778,
+          serviceName: 'Instagram Micro-Likes [5-9 Drip]'
+        },
+        macroLikes: {
+          ...prev.macroLikes,
+          providerId: 'reliablesmm',
+          serviceId: 7147,
+          serviceName: 'Instagram Macro-Likes [Active Profile Drip]'
+        }
+      }));
+    } else if (preset === 'single_reliable') {
+      setRoutingConfig(prev => ({
+        ...prev,
+        mode: 'single_reliable',
+        microLikes: {
+          ...prev.microLikes,
+          providerId: 'reliablesmm',
+          serviceId: 7147,
+          serviceName: 'ReliableSMM Direct Likes (#7147)'
+        },
+        macroLikes: {
+          ...prev.macroLikes,
+          providerId: 'reliablesmm',
+          serviceId: 7147,
+          serviceName: 'Instagram Macro-Likes (#7147)'
+        }
+      }));
+    } else if (preset === 'single_jap') {
+      setRoutingConfig(prev => ({
+        ...prev,
+        mode: 'single_jap',
+        microLikes: {
+          ...prev.microLikes,
+          providerId: 'jap',
+          serviceId: 1778,
+          serviceName: 'Instagram Micro-Likes (#1778)'
+        },
+        macroLikes: {
+          ...prev.macroLikes,
+          providerId: 'jap',
+          serviceId: 1778,
+          serviceName: 'JAP Standard Likes (#1778)'
+        }
+      }));
+    }
+  };
+
+  // Save Config to Server
+  const handleSaveConfig = async () => {
+    setIsSaving(true);
+    setSaveSuccessMsg(null);
+    try {
+      const res = await fetch('/api/routing-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(routingConfig)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSaveSuccessMsg('Routing rules and service gates saved permanently to server!');
+        setTimeout(() => setSaveSuccessMsg(null), 4000);
+      }
+    } catch (e: any) {
+      setSaveSuccessMsg('Error saving routing configuration');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const isReliableOn = panels.find(p => p.id === 'reliablesmm')?.enabled !== false && panels.find(p => p.id === 'reliablesmm')?.status !== 'disabled';
+  const isJapOn = panels.find(p => p.id === 'jap')?.enabled !== false && panels.find(p => p.id === 'jap')?.status !== 'disabled';
+
+  // Compute live routing decision for simulator
   const getRoutingDecision = (metric: string, qty: number) => {
     if (metric === 'views') {
+      const provider = isReliableOn ? 'ReliableSMM' : (isJapOn ? 'JAP (Fallback)' : 'ReliableSMM (Offline)');
       return {
-        provider: 'ReliableSMM',
-        serviceId: 8024,
-        serviceName: 'Instagram High-Retention Views [Service 8024]',
+        provider,
+        serviceId: routingConfig.views.serviceId || 8024,
+        serviceName: 'Instagram High-Retention Views',
         min: 100,
         type: 'Views Highway'
       };
     }
-    if (metric === 'micro_likes' || (metric === 'likes' && qty < 10)) {
+
+    if (metric === 'micro_likes' || (metric === 'likes' && qty < routingConfig.microLikesThreshold)) {
+      if (routingConfig.mode === 'single_reliable' || !isJapOn) {
+        return {
+          provider: 'ReliableSMM',
+          serviceId: routingConfig.macroLikes.serviceId || 7147,
+          serviceName: !isJapOn ? 'ReliableSMM (JAP Turned OFF Fallback)' : 'ReliableSMM Solo Gate',
+          min: 10,
+          type: 'Macro Branch (Auto-Rerouted)'
+        };
+      }
       return {
         provider: 'Just Another Panel (JAP)',
-        serviceId: 1778,
-        serviceName: 'Instagram Micro-Likes [5-9 Drip]',
+        serviceId: routingConfig.microLikes.serviceId || 1778,
+        serviceName: routingConfig.microLikes.serviceName,
         min: 5,
-        type: 'Micro-Likes Branch'
+        type: 'Micro-Likes Branch [5-9 Drip]'
       };
     }
-    if (metric === 'macro_likes' || (metric === 'likes' && qty >= 10)) {
+
+    if (metric === 'macro_likes' || (metric === 'likes' && qty >= routingConfig.microLikesThreshold)) {
+      if (routingConfig.mode === 'single_jap' || !isReliableOn) {
+        return {
+          provider: 'Just Another Panel (JAP)',
+          serviceId: routingConfig.microLikes.serviceId || 1778,
+          serviceName: !isReliableOn ? 'JAP (ReliableSMM Turned OFF Fallback)' : 'JAP Solo Gate',
+          min: 5,
+          type: 'Likes Branch (Auto-Rerouted)'
+        };
+      }
       return {
         provider: 'ReliableSMM',
-        serviceId: 7147,
-        serviceName: 'Instagram Macro-Likes [Active Profile Drip]',
+        serviceId: routingConfig.macroLikes.serviceId || 7147,
+        serviceName: routingConfig.macroLikes.serviceName,
         min: 10,
-        type: 'Macro-Likes Branch'
+        type: 'Macro-Likes Branch [10+ Drip]'
       };
     }
+
     if (metric === 'saves') {
+      const provider = isReliableOn ? 'ReliableSMM' : (isJapOn ? 'JAP (Fallback)' : 'ReliableSMM');
       return {
-        provider: 'ReliableSMM',
-        serviceId: 7841,
+        provider,
+        serviceId: routingConfig.saves.serviceId || 7841,
         serviceName: 'Targeted Saves [Organic Signal]',
         min: 1,
         type: 'Saves Route'
       };
     }
+
     if (metric === 'shares') {
+      const provider = isReliableOn ? 'ReliableSMM' : (isJapOn ? 'JAP (Fallback)' : 'ReliableSMM');
       return {
-        provider: 'ReliableSMM',
-        serviceId: 2060,
+        provider,
+        serviceId: routingConfig.shares.serviceId || 2060,
         serviceName: 'Viral Social Shares',
         min: 10,
         type: 'Shares Route'
       };
     }
+
+    const provider = isReliableOn ? 'ReliableSMM' : (isJapOn ? 'JAP (Fallback)' : 'ReliableSMM');
     return {
-      provider: 'ReliableSMM',
-      serviceId: 7842,
+      provider,
+      serviceId: routingConfig.reposts.serviceId || 7842,
       serviceName: 'Targeted Reposts / Shares v2',
       min: 1,
       type: 'Reposts Route'
@@ -86,11 +361,29 @@ export const RoutingGatewayView: React.FC = () => {
     setIsSimulating(true);
     setTimeout(() => {
       const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
+      const isReroutedToReliable = (testMetric === 'micro_likes') && (!isJapOn || routingConfig.mode === 'single_reliable');
+      const effectiveQty = isReroutedToReliable ? Math.max(10, testQuantity) : testQuantity;
+      const ratePer1k = testMetric === 'views' 
+        ? (pricing.rates.views?.ratePer1k || 0.0007) 
+        : isReroutedToReliable
+        ? (pricing.rates.macroLikes?.ratePer1k || 0.0883)
+        : testMetric === 'micro_likes' 
+        ? (pricing.rates.microLikes?.ratePer1k || 2.0) 
+        : testMetric === 'macro_likes' 
+        ? (pricing.rates.macroLikes?.ratePer1k || 0.0883) 
+        : testMetric === 'saves' 
+        ? (pricing.rates.saves?.ratePer1k || 0.0367) 
+        : testMetric === 'shares' 
+        ? (pricing.rates.shares?.ratePer1k || 0.0115) 
+        : (pricing.rates.reposts?.ratePer1k || 0.2757);
+      const chargeUsd = (effectiveQty / 1000) * ratePer1k;
+      const chargeInr = chargeUsd * (pricing.usdToInr || 86.85);
+
       setDispatchResult({
         timestamp: new Date().toISOString(),
         targetUrl: testLink,
         metric: testMetric,
-        quantity: testQuantity,
+        quantity: effectiveQty,
         provider: currentRoute.provider,
         serviceId: currentRoute.serviceId,
         orderId,
@@ -99,134 +392,526 @@ export const RoutingGatewayView: React.FC = () => {
           action: 'add',
           service: currentRoute.serviceId,
           link: testLink,
-          quantity: testQuantity,
+          quantity: effectiveQty,
         },
         responsePayload: {
           order: orderId,
           status: 'success',
-          charge: (testQuantity / 1000 * 0.35).toFixed(4),
+          ratePer1k: ratePer1k,
+          chargeUsd: chargeUsd.toFixed(5),
+          chargeFormatted: formatUsd(chargeUsd),
+          chargeInrFormatted: formatInr(chargeInr),
           currency: 'USD',
-          remains: testQuantity,
+          remains: effectiveQty,
         }
       });
       setIsSimulating(false);
-    }, 400);
+    }, 350);
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 font-sans">
       {/* Header */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          <Workflow className="w-5 h-5 text-teal-400" />
-          <h2 className="text-base font-bold text-white tracking-tight">
-            Multi-Provider Routing Gateway (SMM v2 Protocol)
-          </h2>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
-            Automated Traffic Router
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Workflow className="w-5 h-5 text-teal-400" />
+              <h2 className="text-base font-bold text-white tracking-tight">
+                Smart-Split Likes Routing & Provider Access Gate
+              </h2>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                SMM v2 Protocol
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Configure dual-provider routing gates (JAP #1778 for 5–9 micro-likes vs ReliableSMM #7147 for 10+ macro-likes) and toggle providers ON/OFF.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isRefreshingPricing}
+              onClick={handleRefreshPricingDirect}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm disabled:opacity-50"
+              title="Fetch latest live rates directly from ReliableSMM and JAP APIs"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingPricing ? 'animate-spin text-teal-400' : ''}`} />
+              <span>{isRefreshingPricing ? 'Fetching Rates...' : 'Fetch Live Rates'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={handleSaveConfig}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold text-xs font-mono transition-all cursor-pointer shadow-md shadow-emerald-500/20 disabled:opacity-50 shrink-0"
+            >
+              <Save className="w-4 h-4" />
+              <span>{isSaving ? 'Saving Gates...' : 'Save Routing Rules'}</span>
+            </button>
+          </div>
+        </div>
+
+        {pricingRefreshMsg && (
+          <div className="mt-3 p-2.5 rounded-xl bg-teal-950/40 border border-teal-500/40 text-teal-300 text-xs font-mono flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+            <span>{pricingRefreshMsg} (Rates updated from panels)</span>
+          </div>
+        )}
+
+        {saveSuccessMsg && (
+          <div className="mt-3 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-xs font-mono flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{saveSuccessMsg}</span>
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 1: PROVIDER ON/OFF POWER GATE SWITCHES */}
+      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
+            <Power className="w-4 h-4 text-purple-400" />
+            <span>Parent Providers Power Gate (Turn ON / Turn OFF)</span>
+          </div>
+          <span className="text-[11px] font-mono text-slate-400">
+            Automated failover: If a provider is OFF, traffic reroutes automatically
           </span>
         </div>
-        <p className="text-xs text-slate-400 mt-1">
-          Intelligent payload inspection dynamically routes micro-volumes vs macro-volumes to optimal parent panels, evading minimum order limits and bot velocity flags.
-        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Card 1: ReliableSMM */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            isReliableOn 
+              ? 'bg-slate-900/80 border-slate-700 text-white' 
+              : 'bg-amber-950/20 border-amber-500/40 text-slate-400'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-sm text-white">ReliableSMM Enterprise</h4>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    isReliableOn 
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {isReliableOn ? 'ONLINE / ENABLED' : 'TURNED OFF'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                  Views (#8024), Macro-Likes (#7147), Saves, Shares, Reposts
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleToggleProvider('reliablesmm')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                  isReliableOn
+                    ? 'bg-rose-600/25 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30'
+                    : 'bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                <Power className="w-3.5 h-3.5" />
+                <span>{isReliableOn ? 'Turn OFF' : 'Turn ON'}</span>
+              </button>
+            </div>
+
+            {!isReliableOn && (
+              <div className="mt-3 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 flex items-center gap-1.5 font-mono">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>ReliableSMM is disabled. All views and macro-likes will attempt fallback to JAP.</span>
+              </div>
+            )}
+          </div>
+
+          {/* Card 2: JAP */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            isJapOn 
+              ? 'bg-slate-900/80 border-slate-700 text-white' 
+              : 'bg-amber-950/20 border-amber-500/40 text-slate-400'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-sm text-white">Just Another Panel (JAP)</h4>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    isJapOn 
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {isJapOn ? 'ONLINE / ENABLED' : 'TURNED OFF'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                  Micro-Likes Specialist (Service #1778 • 5–9 Micro Drip)
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleToggleProvider('jap')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                  isJapOn
+                    ? 'bg-rose-600/25 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30'
+                    : 'bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                <Power className="w-3.5 h-3.5" />
+                <span>{isJapOn ? 'Turn OFF' : 'Turn ON'}</span>
+              </button>
+            </div>
+
+            {!isJapOn && (
+              <div className="mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-start gap-2.5 font-mono">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-amber-200">
+                    JAP IS TURNED OFF • 100% RELIABLESMM GATE ACTIVE
+                  </div>
+                  <div className="text-amber-300/90 leading-relaxed text-[10.5px]">
+                    All likes route exclusively via <strong>ReliableSMM (#7147)</strong> with a <strong>strictly enforced 10+ matrix</strong> (&ge; 10 likes/batch). Micro-parcels (5–9) are automatically consolidated to prevent SMM API order rejection, preserving the exact <strong>Golden Ratio percentages</strong> (3–5% of views) at wholesale rates ($0.0883/1k).
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Visual Routing Architecture Flowchart */}
-      <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 space-y-6">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-2 font-mono">
-          <span>SMM v2 Gateway Routing Matrix</span>
-        </h3>
+      {/* SECTION 2: SMART-SPLIT LIKES GATE & PRESET SELECTOR */}
+      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2 font-mono">
+              <Sliders className="w-4 h-4 text-cyan-400" />
+              <span>Smart-Split Routing Mode & Gate Rules</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Choose routing policy or customize provider service IDs
+            </p>
+          </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-xs font-mono">
-          {/* Node 1: Views Route */}
-          <div className="bg-slate-900/80 border border-emerald-500/30 rounded-xl p-4 space-y-2.5 relative">
-            <div className="flex items-center gap-2 text-emerald-400 font-bold">
-              <Eye className="w-4 h-4" />
-              <span>Views Highway</span>
+          {/* Quick Preset Selector Buttons */}
+          <div className="flex items-center gap-2 flex-wrap font-mono text-xs">
+            <button
+              type="button"
+              onClick={() => handleApplyPreset('smart_split')}
+              className={`px-3 py-1.5 rounded-xl border font-bold transition-all cursor-pointer ${
+                routingConfig.mode === 'smart_split'
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              Smart-Split Gate (Recommended)
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleApplyPreset('single_reliable')}
+              className={`px-3 py-1.5 rounded-xl border font-bold transition-all cursor-pointer ${
+                routingConfig.mode === 'single_reliable'
+                  ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              100% ReliableSMM Only
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleApplyPreset('single_jap')}
+              className={`px-3 py-1.5 rounded-xl border font-bold transition-all cursor-pointer ${
+                routingConfig.mode === 'single_jap'
+                  ? 'bg-pink-500/20 text-pink-300 border-pink-500/40'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              100% JAP Only
+            </button>
+          </div>
+        </div>
+
+        {/* Granular Service ID Form Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs font-mono">
+          {/* Micro-Likes Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-cyan-500/30 space-y-3">
+            <div className="flex items-center justify-between text-cyan-400 font-bold">
+              <span className="flex items-center gap-1.5">
+                <Heart className="w-4 h-4" />
+                <span>Micro-Likes Gate (&lt; 10 likes)</span>
+              </span>
+              <span className="text-[10px] px-1.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                5–9 Drip
+              </span>
             </div>
-            <div className="text-[11px] text-slate-300">
-              Condition: All View Chunks
-            </div>
-            <div className="pt-2 border-t border-slate-800 space-y-1">
-              <div className="text-[10px] text-slate-400">Target Panel:</div>
-              <div className="font-bold text-white">ReliableSMM</div>
-              <div className="text-emerald-400 text-[11px]">Service #8024</div>
-              <div className="text-[10px] text-slate-500">Min 10 • High-Retention Views</div>
+
+            <div className="space-y-2">
+              <div>
+                <label className="text-slate-400 text-[10px]">Assigned Provider:</label>
+                <select
+                  value={routingConfig.microLikes.providerId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    microLikes: { ...prev.microLikes, providerId: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                >
+                  <option value="jap">Just Another Panel (JAP)</option>
+                  <option value="reliablesmm">ReliableSMM Enterprise</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service ID (API Param):</label>
+                <input
+                  type="number"
+                  value={routingConfig.microLikes.serviceId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    microLikes: { ...prev.microLikes, serviceId: Number(e.target.value) }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-cyan-300 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service Label:</label>
+                <input
+                  type="text"
+                  value={routingConfig.microLikes.serviceName}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    microLikes: { ...prev.microLikes, serviceName: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 text-[11px]"
+                />
+              </div>
+
+              {/* Direct Panel Live Rate Badge */}
+              <div className="bg-slate-950/90 p-2 rounded-lg border border-cyan-500/30 text-[11px] font-mono flex items-center justify-between">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                  <span>Panel Live Rate:</span>
+                </span>
+                <span className="text-cyan-300 font-bold">
+                  ${pricing.rates.microLikes?.ratePer1k || 2.0} / 1k <span className="text-slate-500 text-[10px]">(${((pricing.rates.microLikes?.ratePer1k || 2.0) / 1000).toFixed(4)}/ea)</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Node 2: Micro-Likes Route */}
-          <div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-4 space-y-2.5 relative">
-            <div className="flex items-center gap-2 text-cyan-400 font-bold">
-              <Heart className="w-4 h-4" />
-              <span>Micro-Likes</span>
+          {/* Macro-Likes Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-pink-500/30 space-y-3">
+            <div className="flex items-center justify-between text-pink-400 font-bold">
+              <span className="flex items-center gap-1.5">
+                <Heart className="w-4 h-4" />
+                <span>Macro-Likes Gate (10+ likes)</span>
+              </span>
+              <span className="text-[10px] px-1.5 rounded bg-pink-950 text-pink-300 border border-pink-500/30">
+                10+ Profile
+              </span>
             </div>
-            <div className="text-[11px] text-slate-300">
-              Condition: 5 to 9 Likes
-            </div>
-            <div className="pt-2 border-t border-slate-800 space-y-1">
-              <div className="text-[10px] text-slate-400">Target Panel:</div>
-              <div className="font-bold text-white">Just Another Panel (JAP)</div>
-              <div className="text-cyan-400 text-[11px]">Service #1778</div>
-              <div className="text-[10px] text-slate-500">Min 5 • Micro-Drip</div>
+
+            <div className="space-y-2">
+              <div>
+                <label className="text-slate-400 text-[10px]">Assigned Provider:</label>
+                <select
+                  value={routingConfig.macroLikes.providerId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    macroLikes: { ...prev.macroLikes, providerId: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                >
+                  <option value="reliablesmm">ReliableSMM Enterprise</option>
+                  <option value="jap">Just Another Panel (JAP)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service ID (API Param):</label>
+                <input
+                  type="number"
+                  value={routingConfig.macroLikes.serviceId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    macroLikes: { ...prev.macroLikes, serviceId: Number(e.target.value) }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-pink-300 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service Label:</label>
+                <input
+                  type="text"
+                  value={routingConfig.macroLikes.serviceName}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    macroLikes: { ...prev.macroLikes, serviceName: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 text-[11px]"
+                />
+              </div>
+
+              {/* Direct Panel Live Rate Badge */}
+              <div className="bg-slate-950/90 p-2 rounded-lg border border-pink-500/30 text-[11px] font-mono flex items-center justify-between">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse"></span>
+                  <span>Panel Live Rate:</span>
+                </span>
+                <span className="text-pink-300 font-bold">
+                  ${pricing.rates.macroLikes?.ratePer1k || 0.0883} / 1k <span className="text-slate-500 text-[10px]">(${((pricing.rates.macroLikes?.ratePer1k || 0.0883) / 1000).toFixed(6)}/ea)</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Node 3: Macro-Likes Route */}
-          <div className="bg-slate-900/80 border border-pink-500/30 rounded-xl p-4 space-y-2.5 relative">
-            <div className="flex items-center gap-2 text-pink-400 font-bold">
-              <Heart className="w-4 h-4" />
-              <span>Macro-Likes</span>
+          {/* Views Highway Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-emerald-500/30 space-y-3">
+            <div className="flex items-center justify-between text-emerald-400 font-bold">
+              <span className="flex items-center gap-1.5">
+                <Eye className="w-4 h-4" />
+                <span>Views Highway (Min 100)</span>
+              </span>
+              <span className="text-[10px] px-1.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30">
+                Retention Views
+              </span>
             </div>
-            <div className="text-[11px] text-slate-300">
-              Condition: 10+ Likes
-            </div>
-            <div className="pt-2 border-t border-slate-800 space-y-1">
-              <div className="text-[10px] text-slate-400">Target Panel:</div>
-              <div className="font-bold text-white">ReliableSMM</div>
-              <div className="text-pink-400 text-[11px]">Service #7147</div>
-              <div className="text-[10px] text-slate-500">Min 10 • Real Profile Drip</div>
+
+            <div className="space-y-2">
+              <div>
+                <label className="text-slate-400 text-[10px]">Assigned Provider:</label>
+                <select
+                  value={routingConfig.views.providerId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    views: { ...prev.views, providerId: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                >
+                  <option value="reliablesmm">ReliableSMM Enterprise</option>
+                  <option value="jap">Just Another Panel (JAP)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service ID (API Param):</label>
+                <input
+                  type="number"
+                  value={routingConfig.views.serviceId}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    views: { ...prev.views, serviceId: Number(e.target.value) }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-emerald-300 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px]">Service Label:</label>
+                <input
+                  type="text"
+                  value={routingConfig.views.serviceName}
+                  onChange={e => setRoutingConfig(prev => ({
+                    ...prev,
+                    views: { ...prev.views, serviceName: e.target.value }
+                  }))}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 text-[11px]"
+                />
+              </div>
+
+              {/* Direct Panel Live Rate Badge */}
+              <div className="bg-slate-950/90 p-2 rounded-lg border border-emerald-500/30 text-[11px] font-mono flex items-center justify-between">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Panel Live Rate:</span>
+                </span>
+                <span className="text-emerald-300 font-bold">
+                  ${pricing.rates.views?.ratePer1k || 0.0007} / 1k <span className="text-slate-500 text-[10px]">(${((pricing.rates.views?.ratePer1k || 0.0007) / 1000).toFixed(7)}/ea)</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Node 4: Saves Route */}
-          <div className="bg-slate-900/80 border border-amber-500/30 rounded-xl p-4 space-y-2.5 relative">
-            <div className="flex items-center gap-2 text-amber-400 font-bold">
-              <Bookmark className="w-4 h-4" />
+          {/* Saves Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-amber-500/30 space-y-2">
+            <div className="flex items-center justify-between text-amber-400 font-bold">
               <span>Targeted Saves</span>
+              <span className="text-[10px] text-slate-400">Min 1</span>
             </div>
-            <div className="text-[11px] text-slate-300">
-              Condition: 1+ Saves
+            <div>
+              <label className="text-slate-400 text-[10px]">Service ID (ReliableSMM):</label>
+              <input
+                type="number"
+                value={routingConfig.saves.serviceId}
+                onChange={e => setRoutingConfig(prev => ({
+                  ...prev,
+                  saves: { ...prev.saves, serviceId: Number(e.target.value) }
+                }))}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-amber-300 font-bold"
+              />
             </div>
-            <div className="pt-2 border-t border-slate-800 space-y-1">
-              <div className="text-[10px] text-slate-400">Target Panel:</div>
-              <div className="font-bold text-white">ReliableSMM</div>
-              <div className="text-amber-400 text-[11px]">Service #7841</div>
-              <div className="text-[10px] text-slate-500">Min 1 • High Organic Weight</div>
+            <div className="bg-slate-950/90 p-1.5 rounded-lg border border-amber-500/30 text-[10px] font-mono flex items-center justify-between">
+              <span className="text-slate-400">Direct Rate:</span>
+              <span className="text-amber-300 font-bold">${pricing.rates.saves?.ratePer1k || 0.0367} / 1k</span>
             </div>
           </div>
 
-          {/* Node 5: Shares & Reposts */}
-          <div className="bg-slate-900/80 border border-purple-500/30 rounded-xl p-4 space-y-2.5 relative">
-            <div className="flex items-center gap-2 text-purple-400 font-bold">
-              <Share2 className="w-4 h-4" />
-              <span>Shares & Reposts</span>
+          {/* Reposts Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-indigo-500/30 space-y-2">
+            <div className="flex items-center justify-between text-indigo-400 font-bold">
+              <span>Reposts / Network Shares</span>
+              <span className="text-[10px] text-slate-400">Min 1</span>
             </div>
-            <div className="text-[11px] text-slate-300">
-              Condition: Shares (10+), Reposts (1+)
+            <div>
+              <label className="text-slate-400 text-[10px]">Service ID (ReliableSMM):</label>
+              <input
+                type="number"
+                value={routingConfig.reposts.serviceId}
+                onChange={e => setRoutingConfig(prev => ({
+                  ...prev,
+                  reposts: { ...prev.reposts, serviceId: Number(e.target.value) }
+                }))}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-indigo-300 font-bold"
+              />
             </div>
-            <div className="pt-2 border-t border-slate-800 space-y-1">
-              <div className="text-[10px] text-slate-400">Target Panel:</div>
-              <div className="font-bold text-white">ReliableSMM</div>
-              <div className="text-purple-400 text-[11px]">Shares #2060 / Reposts #7842</div>
-              <div className="text-[10px] text-slate-500">Viral Distribution Pipeline</div>
+            <div className="bg-slate-950/90 p-1.5 rounded-lg border border-indigo-500/30 text-[10px] font-mono flex items-center justify-between">
+              <span className="text-slate-400">Direct Rate:</span>
+              <span className="text-indigo-300 font-bold">${pricing.rates.reposts?.ratePer1k || 0.2757} / 1k</span>
+            </div>
+          </div>
+
+          {/* Social Shares Card */}
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-purple-500/30 space-y-2">
+            <div className="flex items-center justify-between text-purple-400 font-bold">
+              <span>Viral DM Shares</span>
+              <span className="text-[10px] text-slate-400">Min 10</span>
+            </div>
+            <div>
+              <label className="text-slate-400 text-[10px]">Service ID (ReliableSMM):</label>
+              <input
+                type="number"
+                value={routingConfig.shares.serviceId}
+                onChange={e => setRoutingConfig(prev => ({
+                  ...prev,
+                  shares: { ...prev.shares, serviceId: Number(e.target.value) }
+                }))}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-purple-300 font-bold"
+              />
+            </div>
+            <div className="bg-slate-950/90 p-1.5 rounded-lg border border-purple-500/30 text-[10px] font-mono flex items-center justify-between">
+              <span className="text-slate-400">Direct Rate:</span>
+              <span className="text-purple-300 font-bold">${pricing.rates.shares?.ratePer1k || 0.0115} / 1k</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Live Gateway Test Console */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 backdrop-blur-sm space-y-4">
+      {/* SECTION 3: LIVE GATEWAY TEST CONSOLE */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-white flex items-center gap-2 font-mono">
             <Code2 className="w-4 h-4 text-cyan-400" />
@@ -235,11 +920,11 @@ export const RoutingGatewayView: React.FC = () => {
           <span className="text-xs text-slate-400 font-mono">Action: 'add' Payload Test</span>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 font-mono text-xs">
           {/* Dispatch Settings */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
             <div>
-              <label className="block text-slate-400 mb-1 font-mono">Metric Type to Route</label>
+              <label className="block text-slate-400 mb-1">Metric Type to Route</label>
               <select
                 value={testMetric}
                 onChange={(e) => {
@@ -252,41 +937,41 @@ export const RoutingGatewayView: React.FC = () => {
                   else if (m === 'shares') setTestQuantity(15);
                   else setTestQuantity(2);
                 }}
-                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white font-mono"
+                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white"
               >
-                <option value="views">Views (Indian IG Views)</option>
                 <option value="micro_likes">Micro-Likes (5 to 9 units)</option>
                 <option value="macro_likes">Macro-Likes (10+ units)</option>
-                <option value="saves">Saves (Min 1)</option>
-                <option value="shares">Shares (Min 10)</option>
-                <option value="reposts">Reposts (Min 1)</option>
+                <option value="views">Views Highway (100+ units)</option>
+                <option value="saves">Saves (1+ units)</option>
+                <option value="shares">Shares (10+ units)</option>
+                <option value="reposts">Reposts (1+ units)</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-slate-400 mb-1 font-mono">Quantity</label>
+              <label className="block text-slate-400 mb-1">Quantity</label>
               <input
                 type="number"
                 value={testQuantity}
                 onChange={(e) => setTestQuantity(Number(e.target.value))}
-                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white font-mono"
+                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white"
               />
             </div>
 
             <div>
-              <label className="block text-slate-400 mb-1 font-mono">Target URL</label>
+              <label className="block text-slate-400 mb-1">Target URL</label>
               <input
                 type="text"
                 value={testLink}
                 onChange={(e) => setTestLink(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white font-mono truncate"
+                className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-white truncate"
               />
             </div>
 
             <button
               onClick={handleSimulateDispatch}
               disabled={isSimulating}
-              className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold font-mono transition-all cursor-pointer"
+              className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold transition-all cursor-pointer"
             >
               <Send className="w-3.5 h-3.5" />
               <span>{isSimulating ? 'Routing Dispatch...' : 'Dispatch SMM v2 Packet'}</span>
@@ -294,9 +979,9 @@ export const RoutingGatewayView: React.FC = () => {
           </div>
 
           {/* Computed Gateway Decision & Payload Inspect */}
-          <div className="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs space-y-3">
+          <div className="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-2">
-              <span>Selected Route: <strong className="text-white">{currentRoute.provider}</strong></span>
+              <span>Active Route: <strong className="text-white">{currentRoute.provider}</strong></span>
               <span className="text-teal-400 font-bold">Service #{currentRoute.serviceId}</span>
             </div>
 

@@ -109,18 +109,18 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 
   // Curve & Duration & Audience Region
   const [durationHours, setDurationHours] = useState(24);
-  const [curve, setCurve] = useState<AlgorithmicCurve>('trending_rocket');
+  const [curve, setCurve] = useState<AlgorithmicCurve>('organic_ramp');
   const [audienceRegion, setAudienceRegion] = useState<AudienceRegion>('india');
   const [curvePoints, setCurvePoints] = useState<CurvePoint[]>(() => {
-    const found = ADVANCED_CURVE_PRESETS.find(p => p.id === 'trending_rocket');
+    const found = ADVANCED_CURVE_PRESETS.find(p => p.id === 'organic_ramp');
     return found ? [...found.points] : [
-      { id: 0, x: 0.05, y: 0.12 },
-      { id: 1, x: 0.16, y: 0.16 },
-      { id: 2, x: 0.32, y: 0.32 },
-      { id: 3, x: 0.50, y: 0.55 },
-      { id: 4, x: 0.68, y: 0.88 },
-      { id: 5, x: 0.84, y: 0.45 },
-      { id: 6, x: 0.95, y: 0.20 },
+      { id: 0, x: 0, y: 0.08 },
+      { id: 1, x: 0.16, y: 0.15 },
+      { id: 2, x: 0.33, y: 0.28 },
+      { id: 3, x: 0.50, y: 0.52 },
+      { id: 4, x: 0.68, y: 0.82 },
+      { id: 5, x: 0.84, y: 0.96 },
+      { id: 6, x: 1, y: 0.72 },
     ];
   });
   const [speedInterval, setSpeedInterval] = useState<SpeedInterval>('interval_20_35m');
@@ -141,6 +141,12 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 
   const intervalMinutes = getIntervalMinutes(speedInterval);
 
+  // Check if JAP is active from parent panels
+  const isJapActive = useMemo(() => {
+    const jap = panels.find(p => p.id === 'jap');
+    return jap ? (jap.enabled !== false && jap.status !== 'disabled') : true;
+  }, [panels]);
+
   // Computed Batches for Single Campaign
   const computedBatches = useMemo(() => {
     return generateCampaignBatches({
@@ -157,8 +163,9 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
       region: audienceRegion,
       cadenceRange,
       speedInterval,
+      japEnabled: isJapActive,
     });
-  }, [metrics, durationHours, intervalMinutes, curve, bezierPoints, jitterPercent, seedChunkProtocol, curvePoints, audienceRegion, cadenceRange, speedInterval]);
+  }, [metrics, durationHours, intervalMinutes, curve, bezierPoints, jitterPercent, seedChunkProtocol, curvePoints, audienceRegion, cadenceRange, speedInterval, isJapActive]);
 
   // Assembled Single Campaign object
   const assembledCampaign: Campaign = useMemo(() => {
@@ -236,6 +243,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
         region: audienceRegion,
         cadenceRange,
         speedInterval,
+        japEnabled: isJapActive,
       });
 
       const camp: Campaign = {
@@ -461,6 +469,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
             batches={computedBatches}
             curvePoints={curvePoints}
             bezierPoints={bezierPoints}
+            japEnabled={isJapActive}
           />
         )}
 

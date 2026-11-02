@@ -27,7 +27,8 @@ import {
   Shuffle,
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
-  ArrowUpDown
+  ArrowUpDown,
+  DollarSign
 } from 'lucide-react';
 import { 
   CampaignMetrics, 
@@ -38,8 +39,15 @@ import {
   CurvePoint,
   BulkUrlItem,
   BulkRangeSettings,
-  FleetSequenceOrder
+  FleetSequenceOrder,
+  PanelLivePricing
 } from '../types';
+import { 
+  calculateCampaignCost, 
+  formatUsd, 
+  formatInr, 
+  DEFAULT_PANEL_PRICING 
+} from '../utils/pricingEngine';
 import { 
   evaluateRatioGuardrails, 
   computeGoldenRatioMetrics,
@@ -168,6 +176,57 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
   const [commentTone, setCommentTone] = useState<'Casual & Organic' | 'Hype & Fire' | 'Relatable' | 'Question-based'>('Casual & Organic');
   const [isShuffling, setIsShuffling] = useState(false);
   const [activeMetricTab, setActiveMetricTab] = useState<'likes' | 'comments' | 'shares' | 'saves' | 'reposts'>('likes');
+
+  // Direct Panel Live Pricing state
+  const [livePricing, setLivePricing] = useState<PanelLivePricing>(DEFAULT_PANEL_PRICING);
+  const [isRefreshingPricing, setIsRefreshingPricing] = useState(false);
+  const [showCostBreakdown, setShowCostBreakdown] = useState(false);
+
+  React.useEffect(() => {
+    fetch('/api/pricing')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.rates) setLivePricing(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleRefreshPricing = async () => {
+    setIsRefreshingPricing(true);
+    try {
+      const res = await fetch('/api/pricing/refresh', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pricing) setLivePricing(data.pricing);
+      }
+    } catch (e) {
+      console.warn('Refresh pricing note:', e);
+    } finally {
+      setIsRefreshingPricing(false);
+    }
+  };
+
+  // Single campaign direct panel cost breakdown
+  const singleCostBreakdown = useMemo(() => {
+    return calculateCampaignCost({ metrics }, livePricing.rates, livePricing.usdToInr);
+  }, [metrics, livePricing]);
+
+  // Bulk fleet aggregate direct panel cost
+  const fleetCostBreakdown = useMemo(() => {
+    let totalUsd = 0;
+    let totalInr = 0;
+    for (const item of bulkUrls) {
+      const c = calculateCampaignCost({ metrics: item.assignedMetrics }, livePricing.rates, livePricing.usdToInr);
+      totalUsd += c.totalCostUsd;
+      totalInr += c.totalCostInr;
+    }
+    return {
+      totalUsd: Math.round(totalUsd * 1000) / 1000,
+      totalInr: Math.round(totalInr * 100) / 100,
+      avgPerReelUsd: bulkUrls.length > 0 ? (totalUsd / bulkUrls.length) : 0,
+      avgPerReelInr: bulkUrls.length > 0 ? (totalInr / bulkUrls.length) : 0,
+    };
+  }, [bulkUrls, livePricing]);
 
   const defaultRange: BulkRangeSettings = useMemo(() => ({
     mode: 'random_range',
@@ -545,6 +604,106 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
 
   return (
     <div className="space-y-6">
+      {/* DIRECT PANEL LIVE COSTING & ESTIMATE CARD */}
+      <div className="bg-gradient-to-r from-emerald-950/40 via-slate-950 to-teal-950/30 border border-emerald-500/40 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <DollarSign className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Live Panel Direct Cost
+                </span>
+                <span className="text-[11px] text-slate-400 font-sans">
+                  Direct SMM v2 protocol rates from ReliableSMM & JAP
+                </span>
+              </div>
+              <div className="flex items-baseline gap-2 mt-0.5">
+                <span className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                  {isBulkMode ? formatUsd(fleetCostBreakdown.totalUsd) : formatUsd(singleCostBreakdown.totalCostUsd)}
+                </span>
+                <span className="text-sm font-bold text-emerald-400">
+                  ({isBulkMode ? formatInr(fleetCostBreakdown.totalInr) : formatInr(singleCostBreakdown.totalCostInr)})
+                </span>
+                {isBulkMode && (
+                  <span className="text-xs text-slate-400 font-sans">
+                    • ~{formatUsd(fleetCostBreakdown.avgPerReelUsd)} ({formatInr(fleetCostBreakdown.avgPerReelInr)}) / reel
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setShowCostBreakdown(prev => !prev)}
+              className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-300 text-xs font-bold transition-all cursor-pointer"
+            >
+              {showCostBreakdown ? 'Hide Breakdown' : 'View Itemized Rates'}
+            </button>
+            <button
+              type="button"
+              disabled={isRefreshingPricing}
+              onClick={handleRefreshPricing}
+              className="p-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-300 hover:text-white transition-all cursor-pointer disabled:opacity-50"
+              title="Refresh rates directly from parent panels"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshingPricing ? 'animate-spin text-emerald-400' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible / Expandable Itemized Rates Table */}
+        {showCostBreakdown && (
+          <div className="pt-3 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs">
+            {/* Views */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Views ({metrics.views.toLocaleString()})</div>
+              <div className="font-bold text-emerald-300">{formatUsd(singleCostBreakdown.viewsCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">ReliableSMM #${livePricing.rates.views?.serviceId || 8024} (${livePricing.rates.views?.ratePer1k}/1k)</div>
+            </div>
+
+            {/* Micro-Likes */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Micro-Likes (5-9)</div>
+              <div className="font-bold text-cyan-300">{formatUsd(singleCostBreakdown.microLikesCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">JAP #${livePricing.rates.microLikes?.serviceId || 1778} (${livePricing.rates.microLikes?.ratePer1k}/1k)</div>
+            </div>
+
+            {/* Macro-Likes */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Macro-Likes (10+)</div>
+              <div className="font-bold text-pink-300">{formatUsd(singleCostBreakdown.macroLikesCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">ReliableSMM #${livePricing.rates.macroLikes?.serviceId || 7147} (${livePricing.rates.macroLikes?.ratePer1k}/1k)</div>
+            </div>
+
+            {/* Saves */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Saves ({metrics.saves})</div>
+              <div className="font-bold text-amber-300">{formatUsd(singleCostBreakdown.savesCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">ReliableSMM #${livePricing.rates.saves?.serviceId || 7841} (${livePricing.rates.saves?.ratePer1k}/1k)</div>
+            </div>
+
+            {/* Shares */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Shares ({metrics.shares})</div>
+              <div className="font-bold text-purple-300">{formatUsd(singleCostBreakdown.sharesCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">ReliableSMM #${livePricing.rates.shares?.serviceId || 2060} (${livePricing.rates.shares?.ratePer1k}/1k)</div>
+            </div>
+
+            {/* Reposts */}
+            <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+              <div className="text-[10px] text-slate-400">Reposts ({metrics.reposts})</div>
+              <div className="font-bold text-indigo-300">{formatUsd(singleCostBreakdown.repostsCost)}</div>
+              <div className="text-[9px] text-slate-500 mt-0.5">ReliableSMM #${livePricing.rates.reposts?.serviceId || 7842} (${livePricing.rates.reposts?.ratePer1k}/1k)</div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 1. Target Views Slider (Single Mode) OR Bulk Volume & Random Range Matrix (Bulk Mode) */}
       {isBulkMode ? (
         <div className="bg-white dark:bg-[#0b0f17] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm dark:shadow-xl space-y-5 transition-colors">
@@ -1886,7 +2045,7 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
                   <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                 )}
                 <span>
-                  <strong>{item.metric.toUpperCase()}</strong>: {item.currentPercent}% of views.
+                  <strong>{(item.metric || '').toUpperCase()}</strong>: {item.currentPercent}% of views.
                   {' '}
                   {item.warning || `Compliant with organic guardrail (${item.minPercent}% - ${item.maxPercent}%).`}
                 </span>

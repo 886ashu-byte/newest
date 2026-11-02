@@ -367,6 +367,22 @@ export const ADVANCED_CURVE_PRESETS: {
   points: CurvePoint[];
 }[] = [
   {
+    id: 'organic_ramp',
+    label: 'Progressive Organic Ramp',
+    desc: 'Low seed start → gradual cohort ramp → peak viral surge',
+    icon: '🌱',
+    isRecommended: true,
+    points: [
+      { id: 0, x: 0, y: 0.08 },
+      { id: 1, x: 0.16, y: 0.15 },
+      { id: 2, x: 0.33, y: 0.28 },
+      { id: 3, x: 0.50, y: 0.52 },
+      { id: 4, x: 0.68, y: 0.82 },
+      { id: 5, x: 0.84, y: 0.96 },
+      { id: 6, x: 1, y: 0.72 },
+    ],
+  },
+  {
     id: 'explore_push',
     label: 'Explore Push',
     desc: 'Slow start → burst → decay',
@@ -905,6 +921,7 @@ export function generateCampaignBatches(params: {
   region?: AudienceRegion;
   cadenceRange?: { minMins: number; maxMins: number };
   speedInterval?: SpeedInterval;
+  japEnabled?: boolean;
 }): ScheduledBatch[] {
   const {
     metrics,
@@ -920,6 +937,7 @@ export function generateCampaignBatches(params: {
     region = 'india',
     cadenceRange,
     speedInterval,
+    japEnabled = true,
   } = params;
 
   // Resolve dynamic cadence range (e.g. 20-35m, 25-40m, 35-50m, 45-60m)
@@ -932,16 +950,40 @@ export function generateCampaignBatches(params: {
   const totalBatches = Math.max(2, Math.round(totalMinutes / avgGap));
   const normalizedWeights = getCurveDensityWeights(curve, totalBatches, bezierPoints, durationHours, curvePoints, region);
 
-  // 1. Distribute VIEWS across all batches with curve shaping & enhanced organic variance
-  // ReliableSMM Service #8024 min order requirement is strictly 100 views
+  // 1. Distribute VIEWS across all batches with progressive organic low-to-high ramp
+  // Verified Organic Growth Law: Natural social algorithms start with small exploratory seed cohorts (100–250 views)
+  // and gradually increase batch-by-batch as early engagement signals trigger the recommendation system.
+  // ReliableSMM Service #8024 min order requirement is strictly 100 views.
   const effectiveJitter = Math.max(18, jitterPercent || 20);
-  const viewsPerBatch = distributeMetricWithCurveAndJitter(
-    metrics.views,
-    normalizedWeights,
-    effectiveJitter,
-    11,
-    { minNonZeroParcel: 100, clusterIfSparse: true, enhanceVariance: true }
-  );
+  let viewsPerBatch: number[];
+
+  if (seedChunkProtocol && totalBatches >= 4 && metrics.views >= 400) {
+    // Stage 1: Seed Warmup Chunk for Batch #0 (Low safe exploration: 100 - 220 views)
+    const seed0 = Math.max(100, Math.min(220, Math.round(metrics.views * 0.02)));
+    // Stage 2: Initial Expansion for Batch #1 (Gentle gradual step: ~1.35x seed0)
+    const seed1 = Math.max(105, Math.min(320, Math.round(seed0 * 1.35)));
+
+    const remainingViews = metrics.views - seed0 - seed1;
+    const remainingWeights = normalizedWeights.slice(2);
+
+    const rampBatches = distributeMetricWithCurveAndJitter(
+      remainingViews,
+      remainingWeights,
+      effectiveJitter,
+      11,
+      { minNonZeroParcel: 100, clusterIfSparse: true, enhanceVariance: true }
+    );
+
+    viewsPerBatch = [seed0, seed1, ...rampBatches];
+  } else {
+    viewsPerBatch = distributeMetricWithCurveAndJitter(
+      metrics.views,
+      normalizedWeights,
+      effectiveJitter,
+      11,
+      { minNonZeroParcel: 100, clusterIfSparse: true, enhanceVariance: true }
+    );
+  }
 
   // 2. Engagement indices & Organic Staggering Protocol
   // Batch #0 is always launch warmup (views only). If seedChunkProtocol is active, Batch #0 & #1 are seed views.
@@ -956,52 +998,80 @@ export function generateCampaignBatches(params: {
   const repostsPerBatch: number[] = new Array(engCount).fill(0);
 
   // -------------------------------------------------------------
-  // LIKES ROUTING RULE:
-  // "use micro like 5-9 service for first 1-2 batch then use macro because it costly therefore"
-  // First 1-2 like batches get 5-9 micro likes (JAP #1778). Subsequent batches get 10+ macro likes (ReliableSMM #7147).
+  // LIKES ROUTING & MATRIX LOGIC:
+  // CASE A (JAP TURNED OFF):
+  // All likes route exclusively to ReliableSMM (Service #7147).
+  // ReliableSMM strictly requires 10+ likes per batch (never 5-9).
+  // All like parcels are strictly >= 10, following the Golden Ratio percentages along the curve.
+  //
+  // CASE B (JAP ENABLED):
+  // First 1-2 batches receive 5-9 micro likes via JAP (#1778), then 10+ macro likes via ReliableSMM (#7147).
   // -------------------------------------------------------------
-  let remainingLikes = Math.max(0, metrics.likes);
-  if (remainingLikes > 0) {
-    if (remainingLikes <= 9) {
-      // Total likes is small: put in Batch 0 of engagement as a single micro parcel (5-9)
-      likesPerBatch[0] = Math.max(5, remainingLikes);
-    } else {
-      // First batch receives 5-9 micro likes (JAP #1778)
-      const micro1 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 6); // 6, 7, 8, or 9
-      likesPerBatch[0] = micro1;
-      remainingLikes -= micro1;
-
-      // Second batch receives micro likes (5-9) if remaining likes allows and at least 2 engagement batches exist
-      if (engCount > 1 && remainingLikes >= 10) {
-        const micro2 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 5); // 5, 6, 7, or 8
-        // Only reserve micro2 if what remains after it can still form valid macro batches of 10+ (or exactly 0)
-        if (remainingLikes - micro2 === 0 || remainingLikes - micro2 >= 10) {
-          likesPerBatch[1] = micro2;
-          remainingLikes -= micro2;
+  if (japEnabled === false) {
+    const totalLikes = Math.max(0, metrics.likes);
+    if (totalLikes > 0) {
+      if (totalLikes < 10) {
+        // Minimum order floor for ReliableSMM API (#7147) is strictly 10 likes
+        likesPerBatch[0] = 10;
+      } else {
+        const macroWeights = normalizedWeights.slice(engagementStartBatch);
+        const macroAllocated = distributeMetricWithCurveAndJitter(
+          totalLikes,
+          macroWeights,
+          effectiveJitter,
+          707,
+          { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
+        );
+        for (let m = 0; m < macroAllocated.length; m++) {
+          likesPerBatch[m] = macroAllocated[m];
         }
       }
+    }
+  } else {
+    // JAP is ON: Smart-Split 5-9 micro-likes for initial batches, then 10+ macro-likes
+    let remainingLikes = Math.max(0, metrics.likes);
+    if (remainingLikes > 0) {
+      if (remainingLikes <= 9) {
+        // Total likes is small: put in Batch 0 of engagement as a single micro parcel (5-9)
+        likesPerBatch[0] = Math.max(5, remainingLikes);
+      } else {
+        // First batch receives 5-9 micro likes (JAP #1778)
+        const micro1 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 6); // 6, 7, 8, or 9
+        likesPerBatch[0] = micro1;
+        remainingLikes -= micro1;
 
-      // Remaining likes are distributed to subsequent batches as MACRO likes (strictly 10+ each for ReliableSMM)
-      if (remainingLikes > 0) {
-        const macroStartIdx = likesPerBatch[1] > 0 ? 2 : 1;
-        const availableMacroBatches = engCount - macroStartIdx;
-
-        if (availableMacroBatches > 0) {
-          const macroWeights = normalizedWeights.slice(engagementStartBatch + macroStartIdx);
-          const macroAllocated = distributeMetricWithCurveAndJitter(
-            remainingLikes,
-            macroWeights,
-            effectiveJitter,
-            707,
-            { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
-          );
-          for (let m = 0; m < macroAllocated.length; m++) {
-            likesPerBatch[macroStartIdx + m] = macroAllocated[m];
+        // Second batch receives micro likes (5-9) if remaining likes allows and at least 2 engagement batches exist
+        if (engCount > 1 && remainingLikes >= 10) {
+          const micro2 = Math.min(remainingLikes, Math.floor(Math.random() * 4) + 5); // 5, 6, 7, or 8
+          // Only reserve micro2 if what remains after it can still form valid macro batches of 10+ (or exactly 0)
+          if (remainingLikes - micro2 === 0 || remainingLikes - micro2 >= 10) {
+            likesPerBatch[1] = micro2;
+            remainingLikes -= micro2;
           }
-        } else {
-          // If no later batches exist, add remainder to the last available batch
-          const lastIdx = engCount - 1;
-          likesPerBatch[lastIdx] += remainingLikes;
+        }
+
+        // Remaining likes are distributed to subsequent batches as MACRO likes (strictly 10+ each for ReliableSMM)
+        if (remainingLikes > 0) {
+          const macroStartIdx = likesPerBatch[1] > 0 ? 2 : 1;
+          const availableMacroBatches = engCount - macroStartIdx;
+
+          if (availableMacroBatches > 0) {
+            const macroWeights = normalizedWeights.slice(engagementStartBatch + macroStartIdx);
+            const macroAllocated = distributeMetricWithCurveAndJitter(
+              remainingLikes,
+              macroWeights,
+              effectiveJitter,
+              707,
+              { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
+            );
+            for (let m = 0; m < macroAllocated.length; m++) {
+              likesPerBatch[macroStartIdx + m] = macroAllocated[m];
+            }
+          } else {
+            // If no later batches exist, add remainder to the last available batch
+            const lastIdx = engCount - 1;
+            likesPerBatch[lastIdx] += remainingLikes;
+          }
         }
       }
     }
@@ -1155,13 +1225,13 @@ export function generateCampaignBatches(params: {
       batchReposts = repostsPerBatch[engIdx] || 0;
     }
 
-    // Determine likes provider routing based on micro vs macro split
+    // Determine likes provider routing based on micro vs macro split and JAP state
     let likesProvider: 'JAP_Micro' | 'ReliableSMM_Macro' | 'None' = 'None';
     if (batchLikes > 0) {
-      if (batchLikes < 10) {
-        likesProvider = 'JAP_Micro'; // JAP #1778 (5-9 micro-drip)
-      } else {
+      if (japEnabled === false || batchLikes >= 10) {
         likesProvider = 'ReliableSMM_Macro'; // Reliable #7147 (10+ macro profile drip)
+      } else {
+        likesProvider = 'JAP_Micro'; // JAP #1778 (5-9 micro-drip)
       }
     }
 
@@ -1183,6 +1253,48 @@ export function generateCampaignBatches(params: {
   }
 
   return batches;
+}
+
+/**
+ * Re-balances an existing array of scheduled batches to 100% ReliableSMM (10+ matrix)
+ * when JAP is turned OFF, consolidating any 5-9 micro parcels into batches of >= 10
+ * while preserving the total like volume and Golden Ratio percentages.
+ */
+export function rebalanceBatchesForReliableSmm(batches: ScheduledBatch[], totalLikes?: number): ScheduledBatch[] {
+  if (!batches || batches.length === 0) return batches;
+  
+  const engBatches = batches.filter(b => !b.isSeedBatch);
+  if (engBatches.length === 0) return batches;
+
+  const currentTotalLikes = totalLikes !== undefined && totalLikes > 0
+    ? totalLikes
+    : batches.reduce((sum, b) => sum + (b.likes || 0), 0);
+
+  if (currentTotalLikes <= 0) {
+    return batches.map(b => ({ ...b, likes: 0, likesProvider: 'None' }));
+  }
+
+  const effectiveTotalLikes = Math.max(10, currentTotalLikes);
+  const engWeights = engBatches.map(b => Math.max(0.05, b.views));
+  const allocated = distributeMetricWithCurveAndJitter(
+    effectiveTotalLikes,
+    engWeights,
+    18,
+    707,
+    { minNonZeroParcel: 10, clusterIfSparse: true, enhanceVariance: true }
+  );
+
+  let allocIdx = 0;
+  return batches.map(b => {
+    if (b.isSeedBatch) return b;
+    const likes = allocated[allocIdx] || 0;
+    allocIdx++;
+    return {
+      ...b,
+      likes,
+      likesProvider: likes > 0 ? 'ReliableSMM_Macro' : 'None'
+    };
+  });
 }
 
 /**
