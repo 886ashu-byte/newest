@@ -78,11 +78,11 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
     likesMin: 80,
     likesMax: 350,
     fixedLikes: 280,
-    // Comments
-    commentsMode: 'auto_golden',
-    commentsMin: 5,
-    commentsMax: 30,
-    fixedComments: 12,
+    // Comments: Turned OFF (0 always)
+    commentsMode: 'fixed',
+    commentsMin: 0,
+    commentsMax: 0,
+    fixedComments: 0,
     // Shares
     sharesMode: 'auto_golden',
     sharesMin: 10,

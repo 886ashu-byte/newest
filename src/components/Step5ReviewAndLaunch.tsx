@@ -299,7 +299,7 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
             </div>
             <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800">
               <div className="text-[10px] text-slate-400">Comments</div>
-              <div className="text-sm font-bold text-cyan-400">{campaign.metrics.comments}</div>
+              <div className="text-sm font-bold text-slate-400">0 (Off)</div>
             </div>
             <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800">
               <div className="text-[10px] text-slate-400">Shares</div>
@@ -598,6 +598,7 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                 savesCost: sum.savesCost + sub.savesCost,
                 sharesCost: sum.sharesCost + sub.sharesCost,
                 repostsCost: sum.repostsCost + sub.repostsCost,
+                commentsCost: (sum.commentsCost || 0) + (sub.commentsCost || 0),
                 japSpendUsd: sum.japSpendUsd + (sub.japSpendUsd || 0),
                 reliableSmmSpendUsd: sum.reliableSmmSpendUsd + (sub.reliableSmmSpendUsd || 0),
               };
@@ -610,6 +611,7 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
               savesCost: 0,
               sharesCost: 0,
               repostsCost: 0,
+              commentsCost: 0,
               japSpendUsd: 0,
               reliableSmmSpendUsd: 0,
             })
@@ -622,11 +624,16 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
         const reliableBal = reliablePanel?.balance ?? 412.15;
         const japBal = japPanel?.balance ?? 247.80;
 
-        const reliableSpend = activeCost.reliableSmmSpendUsd ?? (activeCost.totalUsd - activeCost.microLikesCost);
-        const japSpend = activeCost.japSpendUsd ?? activeCost.microLikesCost;
+        const isTikTok = campaign.platform === 'tiktok';
+        const reliableSpend = isTikTok 
+          ? activeCost.totalUsd 
+          : (activeCost.reliableSmmSpendUsd ?? (activeCost.totalUsd - activeCost.microLikesCost));
+        const japSpend = isTikTok 
+          ? 0 
+          : (activeCost.japSpendUsd ?? activeCost.microLikesCost);
 
         const hasReliableSufficiency = reliableBal >= reliableSpend;
-        const hasJapSufficiency = japBal >= japSpend;
+        const hasJapSufficiency = isTikTok ? true : (japBal >= japSpend);
 
         return (
           <div className="bg-[#0b0f17] border border-emerald-500/30 rounded-2xl p-5 backdrop-blur-sm space-y-4 shadow-xl shadow-emerald-500/5">
@@ -641,11 +648,13 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                       <span>Live Direct Panel Costing</span>
                     </h3>
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold font-mono">
-                      Direct Parent API (No Markup)
+                      {isTikTok ? 'ReliableSMM Direct (Wholesale)' : 'Direct Parent API (No Markup)'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 font-mono mt-0.5">
-                    Rates fetched live via SMM v2 protocol from ReliableSMM & JustAnotherPanel catalogs.
+                    {isTikTok 
+                      ? 'TikTok services routed directly via ReliableSMM verified non-drop catalog at parent wholesale prices.'
+                      : 'Rates fetched live via SMM v2 protocol from ReliableSMM & JustAnotherPanel catalogs.'}
                   </p>
                 </div>
               </div>
@@ -654,7 +663,7 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
               <div className="flex items-center gap-3 bg-slate-950 border border-emerald-500/40 rounded-xl px-4 py-2 self-start sm:self-auto">
                 <div className="text-right font-mono">
                   <div className="text-[10px] text-slate-400 uppercase">
-                    {isBulkMode ? `Total Fleet Spend (${bulkCampaigns.length} Reels)` : 'Total Campaign Cost'}
+                    {isBulkMode ? `Total Fleet Spend (${bulkCampaigns.length} ${isTikTok ? 'TikToks' : 'Reels'})` : 'Total Campaign Cost'}
                   </div>
                   <div className="text-lg font-extrabold text-emerald-300">
                     {formatUsd(activeCost.totalUsd)}
@@ -680,10 +689,12 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                 <div className="flex items-center justify-between text-slate-400 text-[11px]">
                   <span className="text-white font-semibold flex items-center gap-1.5">
                     <Eye className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Views (ReliableSMM #8024)</span>
+                    <span>Views (ReliableSMM #{isTikTok ? '7115' : '8024'})</span>
                   </span>
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/80">
-                    ${(livePricing.rates?.views?.ratePer1k ?? 0.0007).toFixed(4)}/1k
+                    ${isTikTok 
+                      ? (livePricing.tiktokRates?.views?.ratePer1k ?? 0.0047).toFixed(4)
+                      : (livePricing.rates?.views?.ratePer1k ?? 0.0007).toFixed(4)}/1k
                   </span>
                 </div>
                 <div className="flex items-baseline justify-between pt-1">
@@ -697,111 +708,204 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                 </div>
               </div>
 
-              {/* Micro-Likes */}
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-cyan-900/40 space-y-1">
-                <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                  <span className="text-cyan-300 font-semibold flex items-center gap-1.5">
-                    <Heart className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Micro-Likes (JAP #1778)</span>
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/80">
-                    ${(livePricing.rates?.microLikes?.ratePer1k ?? 2.0000).toFixed(4)}/1k
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between pt-1">
-                  <span className="text-[11px] text-slate-400">5-9 likes / micro batch</span>
-                  <div className="text-right">
-                    <span className="font-bold text-cyan-300">{formatUsd(activeCost.microLikesCost)}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.microLikesCost * (livePricing.usdToInr || 86.85))})</span>
+              {isTikTok ? (
+                <>
+                  {/* TikTok Likes (ReliableSMM #5851) */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-pink-900/40 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-pink-300 font-semibold flex items-center gap-1.5">
+                        <Heart className="w-3.5 h-3.5 text-pink-400" />
+                        <span>TikTok Likes (ReliableSMM #5851)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-pink-950/80 text-pink-300 border border-pink-800/80">
+                        ${(livePricing.tiktokRates?.likes?.ratePer1k ?? 0.2462).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {isBulkMode ? totalFleetLikes.toLocaleString() : campaign.metrics.likes.toLocaleString()} likes (10+ min)
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-pink-300">{formatUsd(activeCost.macroLikesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.macroLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Macro-Likes */}
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-purple-900/40 space-y-1">
-                <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                  <span className="text-pink-300 font-semibold flex items-center gap-1.5">
-                    <Heart className="w-3.5 h-3.5 text-pink-400" />
-                    <span>Macro-Likes (ReliableSMM #7147)</span>
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/80">
-                    ${(livePricing.rates?.macroLikes?.ratePer1k ?? 0.0883).toFixed(4)}/1k
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between pt-1">
-                  <span className="text-[11px] text-slate-400">10+ likes / macro batch</span>
-                  <div className="text-right">
-                    <span className="font-bold text-pink-300">{formatUsd(activeCost.macroLikesCost)}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.macroLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                  {/* TikTok Shares (ReliableSMM #2989) */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-emerald-900/40 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-emerald-300 font-semibold flex items-center gap-1.5">
+                        <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Video Shares (ReliableSMM #2989)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300">
+                        ${(livePricing.tiktokRates?.shares?.ratePer1k ?? 0.0121).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {isBulkMode ? totalFleetShares.toLocaleString() : campaign.metrics.shares.toLocaleString()} shares
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-emerald-300">{formatUsd(activeCost.sharesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.sharesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Saves */}
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                  <span className="text-amber-300 font-semibold flex items-center gap-1.5">
-                    <Bookmark className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Saves (ReliableSMM #7841)</span>
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
-                    ${(livePricing.rates?.saves?.ratePer1k ?? 0.0367).toFixed(4)}/1k
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between pt-1">
-                  <span className="text-[11px] text-slate-400">
-                    {isBulkMode ? totalFleetSaves.toLocaleString() : campaign.metrics.saves.toLocaleString()} saves
-                  </span>
-                  <div className="text-right">
-                    <span className="font-bold text-amber-300">{formatUsd(activeCost.savesCost)}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.savesCost * (livePricing.usdToInr || 86.85))})</span>
+                  {/* TikTok Saves / Favorites (ReliableSMM #2980) */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-amber-900/40 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-amber-300 font-semibold flex items-center gap-1.5">
+                        <Bookmark className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Saves / Favorites (ReliableSMM #2980)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300">
+                        ${(livePricing.tiktokRates?.saves?.ratePer1k ?? 0.0121).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {isBulkMode ? totalFleetSaves.toLocaleString() : campaign.metrics.saves.toLocaleString()} saves
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-amber-300">{formatUsd(activeCost.savesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.savesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Shares */}
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                  <span className="text-emerald-300 font-semibold flex items-center gap-1.5">
-                    <Share2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Shares (ReliableSMM #2060)</span>
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
-                    ${(livePricing.rates?.shares?.ratePer1k ?? 0.0115).toFixed(4)}/1k
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between pt-1">
-                  <span className="text-[11px] text-slate-400">
-                    {isBulkMode ? totalFleetShares.toLocaleString() : campaign.metrics.shares.toLocaleString()} shares
-                  </span>
-                  <div className="text-right">
-                    <span className="font-bold text-emerald-300">{formatUsd(activeCost.sharesCost)}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.sharesCost * (livePricing.usdToInr || 86.85))})</span>
+                  {/* TikTok Comments (ReliableSMM #5287) */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1 opacity-80">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Comments (Turned OFF)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-950 text-rose-300 font-medium">
+                        0 (Turned OFF)
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-500">
+                        0 comments • Kept at 0 always
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-slate-400">$0.00</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </>
+              ) : (
+                <>
+                  {/* Micro-Likes */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-cyan-900/40 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-cyan-300 font-semibold flex items-center gap-1.5">
+                        <Heart className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Micro-Likes (JAP #1778)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/80">
+                        ${(livePricing.rates?.microLikes?.ratePer1k ?? 2.0000).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">5-9 likes / micro batch</span>
+                      <div className="text-right">
+                        <span className="font-bold text-cyan-300">{formatUsd(activeCost.microLikesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.microLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Reposts */}
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                  <span className="text-indigo-300 font-semibold flex items-center gap-1.5">
-                    <Repeat className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Reposts (ReliableSMM #7842)</span>
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
-                    ${(livePricing.rates?.reposts?.ratePer1k ?? 0.2757).toFixed(4)}/1k
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between pt-1">
-                  <span className="text-[11px] text-slate-400">
-                    {campaign.metrics.reposts.toLocaleString()} reposts
-                  </span>
-                  <div className="text-right">
-                    <span className="font-bold text-indigo-300">{formatUsd(activeCost.repostsCost)}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.repostsCost * (livePricing.usdToInr || 86.85))})</span>
+                  {/* Macro-Likes */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-purple-900/40 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-pink-300 font-semibold flex items-center gap-1.5">
+                        <Heart className="w-3.5 h-3.5 text-pink-400" />
+                        <span>Macro-Likes (ReliableSMM #7147)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                        ${(livePricing.rates?.macroLikes?.ratePer1k ?? 0.0883).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">10+ likes / macro batch</span>
+                      <div className="text-right">
+                        <span className="font-bold text-pink-300">{formatUsd(activeCost.macroLikesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.macroLikesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+
+                  {/* Saves */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-amber-300 font-semibold flex items-center gap-1.5">
+                        <Bookmark className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Saves (ReliableSMM #7841)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                        ${(livePricing.rates?.saves?.ratePer1k ?? 0.0367).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {isBulkMode ? totalFleetSaves.toLocaleString() : campaign.metrics.saves.toLocaleString()} saves
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-amber-300">{formatUsd(activeCost.savesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.savesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Shares */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-emerald-300 font-semibold flex items-center gap-1.5">
+                        <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Shares (ReliableSMM #2060)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                        ${(livePricing.rates?.shares?.ratePer1k ?? 0.0115).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {isBulkMode ? totalFleetShares.toLocaleString() : campaign.metrics.shares.toLocaleString()} shares
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-emerald-300">{formatUsd(activeCost.sharesCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.sharesCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reposts */}
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                      <span className="text-indigo-300 font-semibold flex items-center gap-1.5">
+                        <Repeat className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Reposts (ReliableSMM #7842)</span>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-300">
+                        ${(livePricing.rates?.reposts?.ratePer1k ?? 0.2757).toFixed(4)}/1k
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        {campaign.metrics.reposts.toLocaleString()} reposts
+                      </span>
+                      <div className="text-right">
+                        <span className="font-bold text-indigo-300">{formatUsd(activeCost.repostsCost)}</span>
+                        <span className="text-[10px] text-slate-400 ml-1">({formatInr(activeCost.repostsCost * (livePricing.usdToInr || 86.85))})</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Wallet Sufficiency Pre-Flight Verification */}
@@ -811,7 +915,11 @@ export const Step5ReviewAndLaunch: React.FC<Step5Props> = ({
                 <div>
                   <span className="text-slate-300 font-bold">Parent Panel Wallet Pre-Flight:</span>
                   <span className="text-slate-400 ml-2">
-                    ReliableSMM balance {formatUsd(reliableBal)} (Need {formatUsd(reliableSpend)}) • JAP balance {formatUsd(japBal)} (Need {formatUsd(japSpend)})
+                    {isTikTok ? (
+                      <>ReliableSMM balance {formatUsd(reliableBal)} (Need {formatUsd(reliableSpend)}) • Direct Route (100% ReliableSMM)</>
+                    ) : (
+                      <>ReliableSMM balance {formatUsd(reliableBal)} (Need {formatUsd(reliableSpend)}) • JAP balance {formatUsd(japBal)} (Need {formatUsd(japSpend)})</>
+                    )}
                   </span>
                 </div>
               </div>

@@ -189,7 +189,7 @@ export function calculateBatchCost(
     const likesCost = ((batch.likes || 0) / 1000) * (tkRates.likes?.ratePer1k || 0.2462);
     const savesCost = ((batch.saves || 0) / 1000) * (tkRates.saves?.ratePer1k || 0.0121);
     const sharesCost = ((batch.shares || 0) / 1000) * (tkRates.shares?.ratePer1k || 0.0121);
-    const commentsCost = ((batch.comments || 0) / 1000) * (tkRates.comments?.ratePer1k || 0.6432);
+    const commentsCost = 0; // Turned OFF for both IG (#7843) and TikTok (#5287) - kept at 0 always
     const total = viewsCost + likesCost + savesCost + sharesCost + commentsCost;
     return Math.round(total * 100000) / 100000;
   }
@@ -240,7 +240,7 @@ export function calculateCampaignCost(
     const likesCost = (metrics.likes / 1000) * (tkRates.likes?.ratePer1k || 0.2462);
     const savesCost = ((metrics.saves || 0) / 1000) * (tkRates.saves?.ratePer1k || 0.0121);
     const sharesCost = ((metrics.shares || 0) / 1000) * (tkRates.shares?.ratePer1k || 0.0121);
-    const commentsCost = ((metrics.comments || 0) / 1000) * (tkRates.comments?.ratePer1k || 0.6432);
+    const commentsCost = 0; // Turned OFF
     const repostsCost = 0;
 
     const totalCostUsd = viewsCost + likesCost + savesCost + sharesCost + commentsCost;
@@ -254,7 +254,7 @@ export function calculateCampaignCost(
       savesCost: Math.round(savesCost * 10000) / 10000,
       sharesCost: Math.round(sharesCost * 10000) / 10000,
       repostsCost: 0,
-      commentsCost: Math.round(commentsCost * 10000) / 10000,
+      commentsCost: 0,
       totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
       totalCostInr: Math.round(totalCostInr * 100) / 100,
       totalUsd: Math.round(totalCostUsd * 10000) / 10000,
@@ -311,6 +311,7 @@ export function calculateCampaignCost(
     savesCost: Math.round(savesCost * 10000) / 10000,
     sharesCost: Math.round(sharesCost * 10000) / 10000,
     repostsCost: Math.round(repostsCost * 10000) / 10000,
+    commentsCost: 0,
     totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
     totalCostInr: Math.round(totalCostInr * 100) / 100,
     totalUsd: Math.round(totalCostUsd * 10000) / 10000,

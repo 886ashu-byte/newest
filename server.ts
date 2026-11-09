@@ -839,7 +839,7 @@ app.post('/api/pricing/estimate', (req: Request, res: Response) => {
   const saves = Number(metrics?.saves) || 0;
   const shares = Number(metrics?.shares) || 0;
   const reposts = Number(metrics?.reposts) || 0;
-  const comments = Number(metrics?.comments) || 0;
+  const comments = 0; // Forced 0 always - turned OFF for both IG (#7843) and TikTok (#5287)
 
   if (isTikTok) {
     const tk = livePanelPricing.tiktokRates || {
@@ -853,7 +853,7 @@ app.post('/api/pricing/estimate', (req: Request, res: Response) => {
     const likesCost = (likes / 1000) * (tk.likes?.ratePer1k || 0.2462);
     const savesCost = (saves / 1000) * (tk.saves?.ratePer1k || 0.0121);
     const sharesCost = (shares / 1000) * (tk.shares?.ratePer1k || 0.0121);
-    const commentsCost = (comments / 1000) * (tk.comments?.ratePer1k || 0.6432);
+    const commentsCost = 0; // Turned OFF
     const totalCostUsd = viewsCost + likesCost + savesCost + sharesCost + commentsCost;
     const totalCostInr = totalCostUsd * USD_TO_INR;
 
@@ -866,7 +866,7 @@ app.post('/api/pricing/estimate', (req: Request, res: Response) => {
         savesCost: Math.round(savesCost * 10000) / 10000,
         sharesCost: Math.round(sharesCost * 10000) / 10000,
         repostsCost: 0,
-        commentsCost: Math.round(commentsCost * 10000) / 10000,
+        commentsCost: 0,
         totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
         totalCostInr: Math.round(totalCostInr * 100) / 100
       },
@@ -1163,6 +1163,12 @@ app.post('/api/campaigns/launch', async (req: Request, res: Response) => {
     currentBatchIndex: 0
   };
 
+  // Enforce Comments = 0 always (turned OFF for both IG #7843 and TikTok #5287)
+  if (newCampaign.metrics) newCampaign.metrics.comments = 0;
+  if (Array.isArray(newCampaign.batches)) {
+    for (const b of newCampaign.batches) b.comments = 0;
+  }
+
   campaigns.unshift(newCampaign);
   persistData();
 
@@ -1207,6 +1213,11 @@ app.post('/api/campaigns/launch-bulk', async (req: Request, res: Response) => {
         startedAt: nowIso,
         currentBatchIndex: 0
       };
+      // Enforce Comments = 0 always
+      if (newCamp.metrics) newCamp.metrics.comments = 0;
+      if (Array.isArray(newCamp.batches)) {
+        for (const b of newCamp.batches) b.comments = 0;
+      }
       createdCampaigns.push(newCamp);
     }
 
@@ -1839,17 +1850,38 @@ function checkAndTriggerAutoPause(
 
 // Helper to calculate and record live batch and campaign cost
 function updateBatchAndCampaignCost(campaign: any, batch: any) {
-  const bViewsCost = ((batch.views || 0) / 1000) * (livePanelPricing.rates.views.ratePer1k || 0.0007);
-  const isMicro = batch.likesProvider === 'JAP_Micro' || (batch.likes < 10);
-  const likeRate = isMicro 
-    ? (livePanelPricing.rates.microLikes.ratePer1k || 2.0000) 
-    : (livePanelPricing.rates.macroLikes.ratePer1k || 0.0883);
-  const bLikesCost = ((batch.likes || 0) / 1000) * likeRate;
-  const bSavesCost = ((batch.saves || 0) / 1000) * (livePanelPricing.rates.saves.ratePer1k || 0.0367);
-  const bSharesCost = ((batch.shares || 0) / 1000) * (livePanelPricing.rates.shares.ratePer1k || 0.0115);
-  const bRepostsCost = ((batch.reposts || 0) / 1000) * (livePanelPricing.rates.reposts.ratePer1k || 0.2757);
+  const isTikTok = campaign.platform === 'tiktok';
 
-  batch.estimatedCost = Math.round((bViewsCost + bLikesCost + bSavesCost + bSharesCost + bRepostsCost) * 100000) / 100000;
+  if (isTikTok) {
+    const tkRates = livePanelPricing.tiktokRates || {
+      views: { ratePer1k: 0.0047 },
+      likes: { ratePer1k: 0.2462 },
+      shares: { ratePer1k: 0.0121 },
+      saves: { ratePer1k: 0.0121 },
+      comments: { ratePer1k: 0.6432 }
+    };
+    const bViewsCost = ((batch.views || 0) / 1000) * (tkRates.views?.ratePer1k || 0.0047);
+    const bLikesCost = ((batch.likes || 0) / 1000) * (tkRates.likes?.ratePer1k || 0.2462);
+    const bSharesCost = ((batch.shares || 0) / 1000) * (tkRates.shares?.ratePer1k || 0.0121);
+    const bSavesCost = ((batch.saves || 0) / 1000) * (tkRates.saves?.ratePer1k || 0.0121);
+    const bCommentsCost = 0; // Comments turned OFF for both IG (#7843) and TikTok (#5287) - kept at 0 always
+    batch.comments = 0;
+
+    batch.estimatedCost = Math.round((bViewsCost + bLikesCost + bSavesCost + bSharesCost + bCommentsCost) * 100000) / 100000;
+  } else {
+    const bViewsCost = ((batch.views || 0) / 1000) * (livePanelPricing.rates.views.ratePer1k || 0.0007);
+    const isMicro = batch.likesProvider === 'JAP_Micro' || (batch.likes < 10);
+    const likeRate = isMicro 
+      ? (livePanelPricing.rates.microLikes.ratePer1k || 2.0000) 
+      : (livePanelPricing.rates.macroLikes.ratePer1k || 0.0883);
+    const bLikesCost = ((batch.likes || 0) / 1000) * likeRate;
+    const bSavesCost = ((batch.saves || 0) / 1000) * (livePanelPricing.rates.saves.ratePer1k || 0.0367);
+    const bSharesCost = ((batch.shares || 0) / 1000) * (livePanelPricing.rates.shares.ratePer1k || 0.0115);
+    const bRepostsCost = ((batch.reposts || 0) / 1000) * (livePanelPricing.rates.reposts.ratePer1k || 0.2757);
+
+    batch.estimatedCost = Math.round((bViewsCost + bLikesCost + bSavesCost + bSharesCost + bRepostsCost) * 100000) / 100000;
+  }
+
   if (Array.isArray(campaign.batches)) {
     campaign.estimatedCost = Math.round(campaign.batches.reduce((sum: number, b: any) => sum + (b.estimatedCost || 0), 0) * 10000) / 10000;
   }
@@ -1859,13 +1891,15 @@ function updateBatchAndCampaignCost(campaign: any, batch: any) {
 async function executeBatch(campaign: any, batch: any, isForceImmediate = false) {
   if (batch.status === 'success' || batch.status === 'running') return;
 
+  const isTikTok = campaign.platform === 'tiktok';
+
   batch.status = 'running';
   batch.dispatchedAt = new Date().toISOString();
   batch.orderIds = batch.orderIds || {};
   batch.executionLogs = batch.executionLogs || [];
 
   const timeStr = new Date().toLocaleTimeString();
-  batch.executionLogs.push(`[${timeStr}] Initializing Batch #${batch.batchIndex} live dispatch...`);
+  batch.executionLogs.push(`[${timeStr}] Initializing Batch #${batch.batchIndex} live dispatch (${isTikTok ? 'TikTok FYP Pipeline' : 'Instagram Reels Pipeline'})...`);
 
   const reliablePanel = panels.find(p => p.id === 'reliablesmm') || {
     id: 'reliablesmm',
@@ -1895,8 +1929,11 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     const viewsQty = Math.max(100, Math.round(batch.views));
     batch.views = viewsQty;
 
-    const viewsProvider = isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel);
-    const viewsServiceId = routingGateConfig.views.serviceId || 8024;
+    // For TikTok: Always route to ReliableSMM #7115 ($0.0047/1k, min 100)
+    // For Instagram: Route to ReliableSMM #8024 or configured gate
+    const viewsProvider = isTikTok ? reliablePanel : (isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel));
+    const viewsServiceId = isTikTok ? 7115 : (routingGateConfig.views.serviceId || 8024);
+    const viewsRate = isTikTok ? (livePanelPricing.tiktokRates?.views?.ratePer1k || 0.0047) : (livePanelPricing.rates.views.ratePer1k || 0.0007);
 
     batch.executionLogs.push(`[${timeStr}] [T+0m] Sending ${viewsQty} views to ${viewsProvider.name} (Service #${viewsServiceId})...`);
     const viewsRes = await callSmmApi(viewsProvider.apiUrl, viewsProvider.apiKey, 'add', {
@@ -1909,7 +1946,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
       const orderId = String(viewsRes.order);
       batch.orderIds.views = orderId;
       batch.executionLogs.push(`[${timeStr}] [T+0m] Views: LIVE order placed on ${viewsProvider.name} (#${viewsServiceId}). Order ID: #${orderId}`);
-      const viewsCost = Math.round(((viewsQty / 1000) * (livePanelPricing.rates.views.ratePer1k || 0.0007)) * 100000) / 100000;
+      const viewsCost = Math.round(((viewsQty / 1000) * viewsRate) * 100000) / 100000;
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_views',
         campaignId: campaign.id,
@@ -1963,16 +2000,17 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     return;
   }
 
-  // Helper for Saves & Reposts (starts at min 1)
+  // Helper for Saves & Reposts (Saves: TikTok min 10 via ReliableSMM #2980, IG min 1 via #7841)
   const dispatchSavesAndReposts = async () => {
     const subTime = new Date().toLocaleTimeString();
-    const savesProvider = isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel);
-    const savesServiceId = routingGateConfig.saves.serviceId || 7841;
-    const repostsServiceId = routingGateConfig.reposts.serviceId || 7842;
+    const savesProvider = isTikTok ? reliablePanel : (isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel));
+    const savesServiceId = isTikTok ? 2980 : (routingGateConfig.saves.serviceId || 7841);
+    const savesRate = isTikTok ? (livePanelPricing.tiktokRates?.saves?.ratePer1k || 0.0121) : (livePanelPricing.rates.saves.ratePer1k || 0.0367);
+    const minSaves = isTikTok ? 10 : 1;
 
     // 2. Saves Routing
     if (batch.saves > 0 && !batch.orderIds.saves) {
-      const savesQty = Math.max(1, Math.round(batch.saves));
+      const savesQty = Math.max(minSaves, Math.round(batch.saves));
       const savesRes = await callSmmApi(savesProvider.apiUrl, savesProvider.apiKey, 'add', {
         service: savesServiceId,
         link: targetLink,
@@ -1987,7 +2025,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.executionLogs.push(`[${subTime}] [T+1m] Saves: ${savesProvider.name} response: "${errorMsg}" (Qty: ${savesQty})`);
         checkAndTriggerAutoPause(campaign, batch, savesProvider.name, savesServiceId, errorMsg);
       }
-      const savesCost = Math.round(((savesQty / 1000) * (livePanelPricing.rates.saves.ratePer1k || 0.0367)) * 100000) / 100000;
+      const savesCost = Math.round(((savesQty / 1000) * savesRate) * 100000) / 100000;
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_saves',
         campaignId: campaign.id,
@@ -2005,8 +2043,9 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
       });
     }
 
-    // 3. Reposts Routing
-    if (batch.reposts > 0 && !batch.orderIds.reposts) {
+    // 3. Reposts Routing (Instagram only, Service #7842)
+    if (!isTikTok && batch.reposts > 0 && !batch.orderIds.reposts) {
+      const repostsServiceId = routingGateConfig.reposts.serviceId || 7842;
       const repostsQty = Math.max(1, Math.round(batch.reposts));
       const repRes = await callSmmApi(savesProvider.apiUrl, savesProvider.apiKey, 'add', {
         service: repostsServiceId,
@@ -2043,11 +2082,63 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     persistData();
   };
 
-  // Helper for Likes (Dynamic Smart-Split & Provider Gate)
+  // Helper for Comments: TURNED OFF for both Instagram (#7843) and TikTok (#5287) - kept at zero always
+  const dispatchComments = async () => {
+    batch.comments = 0;
+    // Comments intentionally turned off across all platforms
+    return;
+  };
+
+  // Helper for Likes (Dynamic Smart-Split & Provider Gate for IG, or ReliableSMM #5851 for TikTok)
   const dispatchLikes = async () => {
     const subTime = new Date().toLocaleTimeString();
     if (batch.likes <= 0 || batch.orderIds.likes) return;
 
+    if (isTikTok) {
+      // TikTok Likes: Always ReliableSMM #5851 (TikTok Likes [Worldwide] 100% Real Accounts Superinstant - $0.2462/1k, min 10)
+      const targetProvider = reliablePanel;
+      const targetServiceId = 5851;
+      const targetQty = Math.max(10, Math.round(batch.likes));
+      const likeRate = livePanelPricing.tiktokRates?.likes?.ratePer1k || 0.2462;
+
+      batch.likesProvider = 'ReliableSMM_Macro';
+      batch.executionLogs.push(`[${subTime}] [T+5m] Dispatching ${targetQty} TikTok likes to ${targetProvider.name} (#${targetServiceId}) at $${likeRate}/1k...`);
+
+      const likesRes = await callSmmApi(targetProvider.apiUrl, targetProvider.apiKey, 'add', {
+        service: targetServiceId,
+        link: targetLink,
+        quantity: targetQty
+      });
+
+      if (likesRes && likesRes.order) {
+        batch.orderIds.likes = String(likesRes.order);
+        batch.executionLogs.push(`[${subTime}] [T+5m] TikTok Likes: LIVE order placed on ${targetProvider.name} (#${targetServiceId}). Order ID: #${likesRes.order}`);
+        const likesCost = Math.round(((targetQty / 1000) * likeRate) * 100000) / 100000;
+        dispatchLogs.push({
+          id: 'log_' + Date.now() + '_likes',
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          batchIndex: batch.batchIndex,
+          timestamp: new Date().toISOString(),
+          providerName: targetProvider.name,
+          serviceId: targetServiceId,
+          metricType: 'macro-likes',
+          quantity: targetQty,
+          status: 'success',
+          orderId: String(likesRes.order),
+          cost: likesCost,
+          responsePayload: likesRes
+        });
+      } else {
+        const errorMsg = likesRes?.error || 'Failed';
+        batch.orderIds.likes = `ERR: ${errorMsg}`;
+        batch.executionLogs.push(`[${subTime}] [T+5m] TikTok Likes error from ${targetProvider.name}: "${errorMsg}"`);
+      }
+      persistData();
+      return;
+    }
+
+    // Instagram Likes Routing
     const microThreshold = routingGateConfig.microLikesThreshold || 10;
     const isMicro = batch.likes < microThreshold;
 
@@ -2057,7 +2148,6 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     let providerLabel = 'ReliableSMM_Macro';
 
     if (routingGateConfig.mode === 'single_reliable' || !isJapActive) {
-      // Force all likes to ReliableSMM
       targetProvider = reliablePanel;
       targetServiceId = routingGateConfig.macroLikes.serviceId || 7147;
       targetQty = Math.max(10, Math.round(batch.likes));
@@ -2066,7 +2156,6 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.executionLogs.push(`[${subTime}] [T+5m] [Provider Gate Note] JAP is turned OFF. Auto-routing likes via ReliableSMM (#${targetServiceId}).`);
       }
     } else if (routingGateConfig.mode === 'single_jap' || !isReliableActive) {
-      // Force all likes to JAP
       targetProvider = japPanel;
       targetServiceId = routingGateConfig.microLikes.serviceId || 1778;
       targetQty = Math.max(5, Math.round(batch.likes));
@@ -2075,20 +2164,18 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.executionLogs.push(`[${subTime}] [T+5m] [Provider Gate Note] ReliableSMM is turned OFF. Auto-routing likes via JAP (#${targetServiceId}).`);
       }
     } else if (isMicro) {
-      // Smart-Split Micro-Likes (< 10) to JAP
       targetProvider = japPanel;
       targetServiceId = routingGateConfig.microLikes.serviceId || 1778;
       targetQty = Math.max(5, Math.min(9, Math.round(batch.likes)));
       providerLabel = 'JAP_Micro';
     } else {
-      // Smart-Split Macro-Likes (>= 10) to ReliableSMM
       targetProvider = reliablePanel;
       targetServiceId = routingGateConfig.macroLikes.serviceId || 7147;
       targetQty = Math.max(10, Math.round(batch.likes));
       providerLabel = 'ReliableSMM_Macro';
     }
 
-    batch.likesProvider = providerLabel;
+    batch.likesProvider = providerLabel as any;
     batch.executionLogs.push(`[${subTime}] [T+5m] Dispatching ${targetQty} likes to ${targetProvider.name} (#${targetServiceId}) [Gate: ${routingGateConfig.mode}]...`);
 
     const likesRes = await callSmmApi(targetProvider.apiUrl, targetProvider.apiKey, 'add', {
@@ -2120,7 +2207,6 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         responsePayload: likesRes
       });
     } else {
-      // Auto-failover to alternate provider if enabled
       const errorMsg = likesRes?.error || 'Failed';
       batch.executionLogs.push(`[${subTime}] [T+5m] Likes primary provider (${targetProvider.name} #${targetServiceId}) error: "${errorMsg}".`);
 
@@ -2143,7 +2229,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
 
         if (altRes && altRes.order) {
           batch.orderIds.likes = String(altRes.order);
-          batch.likesProvider = `${alternateProvider.name}_Failover`;
+          batch.likesProvider = `${alternateProvider.name}_Failover` as any;
           batch.likes = altQty;
           batch.executionLogs.push(`[${subTime}] [T+5m] [Failover SUCCESS] LIVE likes order placed on ${alternateProvider.name} (#${altServiceId}). Order ID: #${altRes.order}`);
           const altRate = alternateProvider.id === 'reliablesmm' 
@@ -2178,14 +2264,15 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     persistData();
   };
 
-  // Helper for Shares
+  // Helper for Shares (TikTok: ReliableSMM #2989 Video Shares at $0.0121/1k, min 10)
   const dispatchShares = async () => {
     const subTime = new Date().toLocaleTimeString();
     if (batch.shares > 0 && !batch.orderIds.shares) {
       const sharesQty = Math.max(10, Math.round(batch.shares));
       batch.shares = sharesQty;
-      const sharesProvider = isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel);
-      const sharesServiceId = routingGateConfig.shares.serviceId || 2060;
+      const sharesProvider = isTikTok ? reliablePanel : (isReliableActive ? reliablePanel : (isJapActive ? japPanel : reliablePanel));
+      const sharesServiceId = isTikTok ? 2989 : (routingGateConfig.shares.serviceId || 2060);
+      const sharesRate = isTikTok ? (livePanelPricing.tiktokRates?.shares?.ratePer1k || 0.0121) : (livePanelPricing.rates.shares.ratePer1k || 0.0115);
 
       const sharesRes = await callSmmApi(sharesProvider.apiUrl, sharesProvider.apiKey, 'add', {
         service: sharesServiceId,
@@ -2201,7 +2288,7 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
         batch.executionLogs.push(`[${subTime}] [T+10m] Shares: ${sharesProvider.name} response: "${errorMsg}" (Qty: ${sharesQty})`);
         checkAndTriggerAutoPause(campaign, batch, sharesProvider.name, sharesServiceId, errorMsg);
       }
-      const sharesCost = Math.round(((sharesQty / 1000) * (livePanelPricing.rates.shares.ratePer1k || 0.0115)) * 100000) / 100000;
+      const sharesCost = Math.round(((sharesQty / 1000) * sharesRate) * 100000) / 100000;
       dispatchLogs.push({
         id: 'log_' + Date.now() + '_shares',
         campaignId: campaign.id,
@@ -2223,15 +2310,13 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
     persistData();
   };
 
-  // Actual-time intra-batch staggered dispatch
-  // Views sent immediately above (T+0 min).
-  // If force-triggered or elapsed > 10m: dispatch remaining items right away.
-  // Otherwise, schedule actual timeouts for T+1m, T+5m/10m, and T+10m.
+  // Intra-batch staggered dispatch
   const batchScheduledMs = new Date(batch.scheduledAt).getTime();
   const elapsedMs = Math.max(0, Date.now() - batchScheduledMs);
 
   if (isForceImmediate || elapsedMs >= 10 * 60 * 1000) {
     await dispatchSavesAndReposts();
+    await dispatchComments();
     await dispatchLikes();
     await dispatchShares();
     batch.status = 'success';
@@ -2241,13 +2326,17 @@ async function executeBatch(campaign: any, batch: any, isForceImmediate = false)
       campaign.completedAt = new Date().toISOString();
     }
   } else {
-    // Staggered actual time delivery with timer cancellation support
     batch.status = 'running';
 
     const tSaves = setTimeout(async () => {
       await dispatchSavesAndReposts();
     }, Math.max(1000, 1 * 60 * 1000 - elapsedMs));
     registerCampaignTimer(campaign.id, tSaves);
+
+    const tComments = setTimeout(async () => {
+      await dispatchComments();
+    }, Math.max(1000, 3 * 60 * 1000 - elapsedMs));
+    registerCampaignTimer(campaign.id, tComments);
 
     const likesDelay = (batch.likes < 10 ? 5 : 10) * 60 * 1000 - elapsedMs;
     const tLikes = setTimeout(async () => {

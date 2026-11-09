@@ -239,11 +239,11 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
     likesMin: 80,
     likesMax: 350,
     fixedLikes: 280,
-    // Comments
-    commentsMode: 'auto_golden',
-    commentsMin: 5,
-    commentsMax: 30,
-    fixedComments: 12,
+    // Comments: Turned OFF (0 always)
+    commentsMode: 'fixed',
+    commentsMin: 0,
+    commentsMax: 0,
+    fixedComments: 0,
     // Shares
     sharesMode: 'auto_golden',
     sharesMin: 10,
@@ -388,11 +388,7 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
           ? (likesList[idx] !== undefined ? likesList[idx] : golden.likes)
           : (merged.fixedLikes !== undefined ? merged.fixedLikes : golden.likes);
 
-        const comments = merged.commentsMode === 'auto_golden'
-          ? golden.comments
-          : merged.commentsMode === 'random_range'
-          ? (commentsList[idx] !== undefined ? commentsList[idx] : golden.comments)
-          : (merged.fixedComments !== undefined ? merged.fixedComments : golden.comments);
+        const comments = 0; // Comments turned OFF (0 always)
 
         const shares = merged.sharesMode === 'auto_golden'
           ? golden.shares
@@ -515,7 +511,7 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
     setMetrics({
       views: safe,
       likes: Math.max(10, Math.round(safe * currentRatio.likes)),
-      comments: Math.max(2, Math.round(safe * currentRatio.comments)),
+      comments: 0, // Turned OFF (0 always)
       shares: Math.max(10, Math.round(safe * currentRatio.shares)),
       saves: Math.max(5, Math.round(safe * currentRatio.saves)),
       reposts: Math.max(2, Math.round(safe * currentRatio.reposts)),
@@ -1176,22 +1172,13 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
                   )}
 
                   {activeMetricTab === 'comments' && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
-                      <span className="text-slate-400">Quick Sets:</span>
-                      {[
-                        { label: '5 – 25', min: 5, max: 25 },
-                        { label: '10 – 50', min: 10, max: 50 },
-                        { label: '25 – 100', min: 25, max: 100 },
-                      ].map(p => (
-                        <button
-                          key={p.label}
-                          type="button"
-                          onClick={() => handleRerollBulk({ commentsMin: p.min, commentsMax: p.max, commentsMode: 'random_range' })}
-                          className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-purple-500 text-slate-600 dark:text-slate-300"
-                        >
-                          {p.label}
-                        </button>
-                      ))}
+                    <div className="flex items-center gap-2 pt-1 text-[11px] text-rose-400">
+                      <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 font-semibold">
+                        TURNED OFF (0 ALWAYS)
+                      </span>
+                      <span className="text-slate-400">
+                        Comments are turned off across Instagram (#7843) and TikTok (#5287) — always 0.
+                      </span>
                     </div>
                   )}
 
@@ -1935,25 +1922,24 @@ export const Step2VolumeAndRatios: React.FC<Step2Props> = ({
           </div>
 
           {/* Comments */}
-          <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2 transition-colors">
+          <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2 transition-colors opacity-85">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-800 dark:text-slate-300 flex items-center gap-1.5">
-                <MessageSquare className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+                <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
                 <span>Comments</span>
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 dark:bg-cyan-500/10 dark:text-cyan-300 dark:border-cyan-500/20">
-                {((metrics.comments / metrics.views) * 100).toFixed(3)}%
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:border-rose-500/20 font-semibold">
+                TURNED OFF (0 ALWAYS)
               </span>
             </div>
             <input
               type="number"
-              min={1}
-              value={metrics.comments}
-              onChange={(e) => setMetrics({ ...metrics, comments: Number(e.target.value) })}
-              className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:border-cyan-500 transition-colors"
+              disabled
+              value={0}
+              className="w-full bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800/80 rounded-lg px-2.5 py-1.5 text-sm font-mono text-slate-400 cursor-not-allowed"
             />
             <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-              Target: 0.05%–0.30%
+              Turned OFF for IG (#7843) & TikTok (#5287) • Kept at 0 always
             </div>
           </div>
 

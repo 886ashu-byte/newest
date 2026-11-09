@@ -452,7 +452,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
       const updatedMetrics = {
         views: Math.max(100, Number(cloneForm.views) || 100),
         likes: Math.max(5, Number(cloneForm.likes) || 5),
-        comments: Math.max(0, Number(cloneForm.comments) || 0),
+        comments: 0, // Turned OFF (0 always)
         shares: Math.max(10, Number(cloneForm.shares) || 10),
         saves: Math.max(1, Number(cloneForm.saves) || 1),
         reposts: Math.max(1, Number(cloneForm.reposts) || 1)
@@ -1120,7 +1120,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
       const updatedMetrics = {
         views: Math.max(100, Number(editForm.views) || 100),
         likes: Math.max(5, Number(editForm.likes) || 5),
-        comments: Math.max(0, Number(editForm.comments) || 0),
+        comments: 0, // Turned OFF (0 always)
         shares: Math.max(10, Number(editForm.shares) || 10),
         saves: Math.max(1, Number(editForm.saves) || 1),
         reposts: Math.max(1, Number(editForm.reposts) || 1)
@@ -2619,7 +2619,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                       <tr>
                         <th className="py-2.5 px-3">Batch</th>
                         <th className="py-2.5 px-3">Scheduled At</th>
-                        <th className="py-2.5 px-3">Views (ReliableSMM #8024)</th>
+                        <th className="py-2.5 px-3">Views ({selectedCampaign.platform === 'tiktok' ? 'Reliable #7115' : 'Reliable #8024'})</th>
                         <th className="py-2.5 px-3">Likes & Routing</th>
                         <th className="py-2.5 px-3">Engagement</th>
                         <th className="py-2.5 px-3">Live Order IDs</th>
@@ -2673,7 +2673,11 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                               <div>
                                 <span className="text-pink-400 font-bold">{batch.likes}</span>
                                 <div className="text-[10px] mt-0.5">
-                                  {batch.likes < 10 ? (
+                                  {selectedCampaign.platform === 'tiktok' ? (
+                                    <span className="text-cyan-400 bg-cyan-950/40 px-1 rounded border border-cyan-500/30">
+                                      TikTok #5851 (min 10)
+                                    </span>
+                                  ) : batch.likes < 10 ? (
                                     <span className="text-cyan-400 bg-cyan-950/40 px-1 rounded border border-cyan-500/30">
                                       JAP #1778 (min 5)
                                     </span>
@@ -2722,7 +2726,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                             )}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono text-emerald-300 font-semibold whitespace-nowrap">
-                            {formatUsd(batch.estimatedCost ?? calculateBatchCost(batch, livePricing))}
+                            {formatUsd(batch.estimatedCost ?? calculateBatchCost(batch, livePricing, selectedCampaign.platform))}
                           </td>
                           <td className="py-2.5 px-3 text-center">
                             {batch.status === 'success' ? (
@@ -3125,18 +3129,16 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                     />
                   </div>
 
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 opacity-80">
                     <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-emerald-400" /> Comments</span>
-                      <span className="text-[9px] text-slate-400">0+</span>
+                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-slate-500" /> Comments</span>
+                      <span className="text-[9px] text-rose-400 font-bold">Turned OFF (0)</span>
                     </div>
                     <input
                       type="number"
-                      min="0"
-                      step="1"
-                      value={editForm.comments}
-                      onChange={e => setEditForm({ ...editForm, comments: Math.max(0, Number(e.target.value) || 0) })}
-                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                      disabled
+                      value={0}
+                      className="w-full bg-transparent text-slate-500 font-bold mt-1 focus:outline-none border-b border-slate-800 pb-0.5 cursor-not-allowed"
                     />
                   </div>
 
@@ -3540,18 +3542,16 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                     />
                   </div>
 
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 opacity-80">
                     <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-emerald-400" /> Comments</span>
-                      <span className="text-[9px] text-slate-400">0+</span>
+                      <span className="flex items-center gap-1 text-slate-400"><MessageSquare className="w-3 h-3 text-slate-500" /> Comments</span>
+                      <span className="text-[9px] text-rose-400 font-bold">Turned OFF (0)</span>
                     </div>
                     <input
                       type="number"
-                      min="0"
-                      step="1"
-                      value={cloneForm.comments}
-                      onChange={e => setCloneForm({ ...cloneForm, comments: Math.max(0, Number(e.target.value) || 0) })}
-                      className="w-full bg-transparent text-white font-bold mt-1 focus:outline-none border-b border-slate-800 focus:border-emerald-400 pb-0.5"
+                      disabled
+                      value={0}
+                      className="w-full bg-transparent text-slate-500 font-bold mt-1 focus:outline-none border-b border-slate-800 pb-0.5 cursor-not-allowed"
                     />
                   </div>
 

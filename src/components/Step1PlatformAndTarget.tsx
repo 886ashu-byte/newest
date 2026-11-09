@@ -127,9 +127,15 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
     setBulkUrls(parsedItems);
   }, [bulkRawText, isBulkMode, platform, setBulkUrls]);
 
-  // Load 5 sample reels for instant testing
+  // Load 5 sample videos for instant testing
   const handleLoadSampleUrls = () => {
-    const sampleUrls = [
+    const sampleUrls = platform === 'tiktok' ? [
+      'https://www.tiktok.com/@tiktok/video/7123456789012345678',
+      'https://www.tiktok.com/@khaby.lame/video/7100000000000000000',
+      'https://www.tiktok.com/@zachking/video/7155555555555555555',
+      'https://www.tiktok.com/@charlidamelio/video/7188888888888888888',
+      'https://www.tiktok.com/@bellapoarch/video/7199999999999999999',
+    ] : [
       'https://www.instagram.com/reel/DD1rB4wSpK9/',
       'https://www.instagram.com/reel/DD7hT82oJ6m/',
       'https://www.instagram.com/reel/DEAcQ81pq3L/',
@@ -140,7 +146,7 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
       setBulkRawText(sampleUrls.join('\n'));
     }
     if (setGroupName && (!groupName || groupName.includes('Fleet #01'))) {
-      setGroupName('Instagram Reels Viral Drop #01');
+      setGroupName(platform === 'tiktok' ? 'TikTok Viral FYP Fleet #01' : 'Instagram Reels Viral Drop #01');
     }
   };
 
@@ -309,7 +315,7 @@ export const Step1PlatformAndTarget: React.FC<Step1Props> = ({
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-500 dark:text-slate-400">FYP Acceleration Gateway</span>
+            <span className="text-slate-500 dark:text-slate-400">ReliableSMM Direct (#7115 Views $0.0047/1k, #5851 Likes, #2989 Shares)</span>
             <span className="text-cyan-600 dark:text-cyan-400 font-semibold">Active Route</span>
           </div>
         </div>

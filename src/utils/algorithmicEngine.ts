@@ -182,6 +182,18 @@ export function evaluateRatioGuardrails(views: number, metrics: Omit<CampaignMet
     maxPct: number,
     recommendedPct: number
   ): RatioGuardrailStatus => {
+    if (metric === 'comments') {
+      return {
+        metric: 'comments',
+        currentPercent: 0,
+        minPercent: 0,
+        maxPercent: 0,
+        isCompliant: true,
+        recommendedValue: 0,
+        warning: undefined,
+      };
+    }
+
     const currentPercent = (currentValue / safeViews) * 100;
     const isCompliant = currentPercent >= minPct * 0.95 && currentPercent <= maxPct * 1.05;
     const recommendedValue = Math.round(safeViews * (recommendedPct / 100));
@@ -206,7 +218,7 @@ export function evaluateRatioGuardrails(views: number, metrics: Omit<CampaignMet
 
   return [
     calculate('likes', metrics.likes, 2.0, 6.0, 4.0),
-    calculate('comments', metrics.comments, 0.05, 0.30, 0.12),
+    calculate('comments', 0, 0, 0, 0),
     calculate('shares', metrics.shares, 0.6, 2.2, 1.2),
     calculate('saves', metrics.saves, 0.8, 2.5, 1.5),
     calculate('reposts', metrics.reposts, 0.1, 0.6, 0.35),
@@ -230,7 +242,7 @@ export const RATIO_PRESET_CONFIGS: Record<RatioPresetType, {
     tagline: 'Balanced natural distribution (Recommended for Explore page)',
     badge: 'Standard Organic',
     likesPct: 4.0,
-    commentsPct: 0.12,
+    commentsPct: 0, // Turned OFF (0 always)
     sharesPct: 1.2,
     savesPct: 1.5,
     repostsPct: 0.35,
@@ -240,7 +252,7 @@ export const RATIO_PRESET_CONFIGS: Record<RatioPresetType, {
     tagline: 'Higher engagement velocity for aggressive algorithmic FYP push',
     badge: 'High Velocity',
     likesPct: 5.5,
-    commentsPct: 0.20,
+    commentsPct: 0, // Turned OFF (0 always)
     sharesPct: 1.8,
     savesPct: 2.2,
     repostsPct: 0.50,
@@ -250,7 +262,7 @@ export const RATIO_PRESET_CONFIGS: Record<RatioPresetType, {
     tagline: 'Minimal footprint slow-drip with zero algorithmic detection profile',
     badge: 'Low Profile',
     likesPct: 2.5,
-    commentsPct: 0.06,
+    commentsPct: 0, // Turned OFF (0 always)
     sharesPct: 0.8,
     savesPct: 1.0,
     repostsPct: 0.20,
@@ -266,7 +278,7 @@ export function computeMetricsFromRatioPreset(views: number, preset: RatioPreset
   return {
     views: safeViews,
     likes: Math.max(10, Math.round(safeViews * (cfg.likesPct / 100))),
-    comments: Math.max(5, Math.round(safeViews * (cfg.commentsPct / 100))),
+    comments: 0, // Turned OFF for both IG (#7843) and TikTok (#5287) - kept at zero always
     shares: Math.max(10, Math.round(safeViews * (cfg.sharesPct / 100))),
     saves: Math.max(10, Math.round(safeViews * (cfg.savesPct / 100))),
     reposts: Math.max(2, Math.round(safeViews * (cfg.repostsPct / 100))),
@@ -1083,29 +1095,8 @@ export function generateCampaignBatches(params: {
   // Randomly distribute Comments, Shares, Saves, Reposts across the timeline so they are not dumped upfront!
   // -------------------------------------------------------------
 
-  // A. Comments: Staggered randomly across batches (avoiding dumping in Batch 0)
-  if (metrics.comments > 0) {
-    let remComments = metrics.comments;
-    const commentEligibleIndices: number[] = [];
-    const commentStart = engCount > 2 ? 1 : 0;
-    for (let c = commentStart; c < engCount; c++) commentEligibleIndices.push(c);
-
-    const maxDrops = Math.max(1, Math.min(commentEligibleIndices.length, Math.ceil(remComments / 2)));
-    const shuffledCommentIndices = [...commentEligibleIndices].sort((a, b) => {
-      const hA = Math.sin(a * 91 + (startDate?.getTime() || 1));
-      const hB = Math.sin(b * 91 + (startDate?.getTime() || 1));
-      return hA - hB;
-    }).slice(0, maxDrops).sort((a, b) => a - b);
-
-    let commIdx = 0;
-    while (remComments > 0) {
-      const targetBatch = shuffledCommentIndices[commIdx % shuffledCommentIndices.length];
-      const take = Math.min(remComments, commIdx < shuffledCommentIndices.length ? (Math.floor(Math.random() * 2) + 1) : 1);
-      commentsPerBatch[targetBatch] += take;
-      remComments -= take;
-      commIdx++;
-    }
-  }
+  // A. Comments: Turned OFF across both Instagram (#7843) and TikTok (#5287) - kept at zero always
+  // No comments are distributed into any batch.
 
   // B. Shares: Only after early traction! ReliableSMM #2060 requires strictly 10+ shares.
   if (metrics.shares > 0) {
