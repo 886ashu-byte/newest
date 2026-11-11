@@ -1,130 +1,5 @@
 {
-  "campaigns": [
-    {
-      "id": "camp_mw9r86x3",
-      "name": "Test TikTok Verification Video",
-      "platform": "tiktok",
-      "targetUrl": "https://www.tiktok.com/@tiktok/video/7123456789012345678",
-      "handle": "@test_creator_tk",
-      "durationHours": 6,
-      "curve": "s-curve",
-      "jitterPercent": 12,
-      "metrics": {
-        "views": 5000,
-        "likes": 200,
-        "comments": 10,
-        "shares": 30,
-        "saves": 50,
-        "reposts": 0
-      },
-      "batches": [
-        {
-          "batchIndex": 0,
-          "scheduledAt": "2026-11-09T21:09:32.292Z",
-          "isSeedBatch": true,
-          "views": 150,
-          "likes": 0,
-          "comments": 0,
-          "shares": 0,
-          "saves": 0,
-          "reposts": 0,
-          "likesProvider": "None",
-          "status": "success",
-          "dispatchedAt": "2026-11-09T21:09:32.296Z",
-          "orderIds": {
-            "views": "9894418"
-          },
-          "executionLogs": [
-            "[9:09:32 PM] Initializing Batch #0 live dispatch (TikTok FYP Pipeline)...",
-            "[9:09:32 PM] [T+0m] Sending 150 views to ReliableSMM Enterprise (Service #7115)...",
-            "[9:09:32 PM] [T+0m] Views: LIVE order placed on ReliableSMM Enterprise (#7115). Order ID: #9894418",
-            "[9:09:32 PM] Seed Warmup Protocol: Engagement locked (Likes, Comments, Saves held for organic warmup)."
-          ],
-          "estimatedCost": 0.00033
-        },
-        {
-          "batchIndex": 1,
-          "scheduledAt": "2026-11-09T21:10:32.292Z",
-          "isSeedBatch": false,
-          "views": 350,
-          "likes": 15,
-          "comments": 2,
-          "shares": 5,
-          "saves": 4,
-          "reposts": 0,
-          "likesProvider": "ReliableSMM_Macro",
-          "status": "pending"
-        }
-      ],
-      "status": "running",
-      "createdAt": "2026-11-09T21:09:32.295Z",
-      "startedAt": "2026-11-09T21:09:32.295Z",
-      "currentBatchIndex": 0,
-      "estimatedCost": 0.0003
-    },
-    {
-      "id": "camp_mw9r86la",
-      "name": "Test IG Verification Reel",
-      "platform": "instagram",
-      "targetUrl": "https://www.instagram.com/reel/DD1rB4wSpK9/",
-      "handle": "@test_creator_ig",
-      "durationHours": 6,
-      "curve": "s-curve",
-      "jitterPercent": 12,
-      "metrics": {
-        "views": 5000,
-        "likes": 200,
-        "comments": 10,
-        "shares": 30,
-        "saves": 50,
-        "reposts": 5
-      },
-      "batches": [
-        {
-          "batchIndex": 0,
-          "scheduledAt": "2026-11-09T21:09:31.768Z",
-          "isSeedBatch": true,
-          "views": 150,
-          "likes": 0,
-          "comments": 0,
-          "shares": 0,
-          "saves": 0,
-          "reposts": 0,
-          "likesProvider": "None",
-          "status": "success",
-          "dispatchedAt": "2026-11-09T21:09:31.871Z",
-          "orderIds": {
-            "views": "9894417"
-          },
-          "executionLogs": [
-            "[9:09:31 PM] Initializing Batch #0 live dispatch (Instagram Reels Pipeline)...",
-            "[9:09:31 PM] [T+0m] Sending 150 views to ReliableSMM Enterprise (Service #8024)...",
-            "[9:09:31 PM] [T+0m] Views: LIVE order placed on ReliableSMM Enterprise (#8024). Order ID: #9894417",
-            "[9:09:31 PM] Seed Warmup Protocol: Engagement locked (Likes, Comments, Saves held for organic warmup)."
-          ],
-          "estimatedCost": 0.00009
-        },
-        {
-          "batchIndex": 1,
-          "scheduledAt": "2026-11-09T21:10:31.768Z",
-          "isSeedBatch": false,
-          "views": 350,
-          "likes": 12,
-          "comments": 1,
-          "shares": 2,
-          "saves": 3,
-          "reposts": 1,
-          "likesProvider": "ReliableSMM_Macro",
-          "status": "pending"
-        }
-      ],
-      "status": "running",
-      "createdAt": "2026-11-09T21:09:31.870Z",
-      "startedAt": "2026-11-09T21:09:31.870Z",
-      "currentBatchIndex": 0,
-      "estimatedCost": 0.0001
-    }
-  ],
+  "campaigns": [],
   "panels": [
     {
       "id": "reliablesmm",
@@ -132,11 +7,11 @@
       "apiUrl": "https://reliablesmm.com/api/v2",
       "apiKey": "79bb502d1dc2c1bccf81ef56a6ec9ef5",
       "currency": "USD",
-      "balance": 0.5468217,
+      "balance": 0.5339972,
       "status": "active",
       "isDefault": true,
-      "lastChecked": "2026-11-09T21:09:31.334Z",
-      "supportedServicesCount": 4075,
+      "lastChecked": "2026-11-11T16:46:47.432Z",
+      "supportedServicesCount": 4089,
       "notes": "Primary provider for Views (Service 8024), Macro-Likes (7147), Saves (7841), Reposts (7842), Shares (2060)"
     },
     {
@@ -145,83 +20,16 @@
       "apiUrl": "https://justanotherpanel.com/api/v2",
       "apiKey": "085945504bab9706597c00aaf8c1edb4",
       "currency": "USD",
-      "balance": 0.0325827,
+      "balance": 0.0045827,
       "status": "active",
       "isDefault": true,
-      "lastChecked": "2026-11-09T21:09:32.596Z",
-      "supportedServicesCount": 5749,
+      "lastChecked": "2026-11-11T16:46:48.213Z",
+      "supportedServicesCount": 5735,
       "notes": "Micro-Likes specialist (Service 1778, 5-9 likes micro-drip) & Custom Engagement",
       "enabled": true
     }
   ],
-  "dispatchLogs": [
-    {
-      "id": "log_1792508934493_views",
-      "campaignId": "camp_mvgtjcqg",
-      "campaignName": "Test Campaign",
-      "batchIndex": 0,
-      "timestamp": "2026-10-20T15:08:54.493Z",
-      "providerName": "ReliableSMM",
-      "serviceId": 8024,
-      "metricType": "views",
-      "quantity": 120,
-      "status": "success",
-      "orderId": "8531105",
-      "responsePayload": {
-        "order": 8531105
-      }
-    },
-    {
-      "id": "log_1792988296372_views",
-      "campaignId": "camp_mvoqxqqv_2koy",
-      "campaignName": "Cloned Test",
-      "batchIndex": 0,
-      "timestamp": "2026-10-26T04:18:16.372Z",
-      "providerName": "ReliableSMM",
-      "serviceId": 8024,
-      "metricType": "views",
-      "quantity": 100,
-      "status": "success",
-      "orderId": "8876806",
-      "responsePayload": {
-        "order": 8876806
-      }
-    },
-    {
-      "id": "log_1794258572282_views",
-      "campaignId": "camp_mw9r86la",
-      "campaignName": "Test IG Verification Reel",
-      "batchIndex": 0,
-      "timestamp": "2026-11-09T21:09:32.282Z",
-      "providerName": "ReliableSMM Enterprise",
-      "serviceId": 8024,
-      "metricType": "views",
-      "quantity": 150,
-      "status": "success",
-      "orderId": "9894417",
-      "cost": 0.00009,
-      "responsePayload": {
-        "order": 9894417
-      }
-    },
-    {
-      "id": "log_1794258572668_views",
-      "campaignId": "camp_mw9r86x3",
-      "campaignName": "Test TikTok Verification Video",
-      "batchIndex": 0,
-      "timestamp": "2026-11-09T21:09:32.668Z",
-      "providerName": "ReliableSMM Enterprise",
-      "serviceId": 7115,
-      "metricType": "views",
-      "quantity": 150,
-      "status": "success",
-      "orderId": "9894418",
-      "cost": 0.00033,
-      "responsePayload": {
-        "order": 9894418
-      }
-    }
-  ],
+  "dispatchLogs": [],
   "routingGateConfig": {
     "mode": "smart_split",
     "microLikesThreshold": 10,
@@ -275,7 +83,7 @@
         "maxQuantity": 215687654,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.852Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "microLikes": {
         "serviceId": 1778,
@@ -287,7 +95,7 @@
         "maxQuantity": 50000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.853Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "macroLikes": {
         "serviceId": 7147,
@@ -299,7 +107,7 @@
         "maxQuantity": 1000000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.853Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "saves": {
         "serviceId": 7841,
@@ -311,7 +119,7 @@
         "maxQuantity": 100000000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.853Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "shares": {
         "serviceId": 2060,
@@ -323,7 +131,7 @@
         "maxQuantity": 2147483647,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "reposts": {
         "serviceId": 7842,
@@ -335,7 +143,7 @@
         "maxQuantity": 10000000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       }
     },
     "tiktokRates": {
@@ -349,7 +157,7 @@
         "maxQuantity": 217545811,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "likes": {
         "serviceId": 5851,
@@ -361,7 +169,7 @@
         "maxQuantity": 100000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "shares": {
         "serviceId": 2989,
@@ -373,7 +181,7 @@
         "maxQuantity": 2147483647,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "saves": {
         "serviceId": 2980,
@@ -385,7 +193,7 @@
         "maxQuantity": 1000000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.854Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       },
       "comments": {
         "serviceId": 5287,
@@ -397,11 +205,11 @@
         "maxQuantity": 5000,
         "currency": "USD",
         "isLive": true,
-        "lastChecked": "2026-11-09T21:07:52.855Z"
+        "lastChecked": "2026-11-11T16:46:48.214Z"
       }
     },
     "usdToInr": 86.85,
-    "lastFetchedAt": "2026-11-09T21:07:52.855Z",
+    "lastFetchedAt": "2026-11-11T16:46:48.214Z",
     "isLive": true
   }
 }

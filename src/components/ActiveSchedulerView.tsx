@@ -331,7 +331,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Client_Report_${campaign.handle.replace(/[@/]/g, '')}_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Client_Report_${(campaign.handle || 'campaign').replace(/[@/]/g, '')}_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -768,45 +768,19 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
     reader.readAsText(file);
   };
 
-  // Auto-scan browser localStorage for any previously created campaigns
-  const handleCheckBrowserStorage = () => {
+  // Direct refresh from Cloud Server storage
+  const handleRefreshFromCloudServer = async () => {
     try {
-      const raw = localStorage.getItem('smm_campaigns_cache');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setCampaigns(parsed);
-          fetch('/api/campaigns/sync-cache', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ clientCampaigns: parsed })
-          });
-          setToastMsg({ text: `Found and restored ${parsed.length} campaigns from your browser cache!`, type: 'success' });
-          setIsImportModalOpen(false);
-          return;
-        }
+      const res = await fetch('/api/campaigns');
+      if (res.ok) {
+        const data = await res.json();
+        const serverCampaigns = Array.isArray(data.campaigns) ? data.campaigns : [];
+        setCampaigns(serverCampaigns);
+        setToastMsg({ text: `Synced ${serverCampaigns.length} campaigns directly from Cloud Server.`, type: 'success' });
+        setIsImportModalOpen(false);
+      } else {
+        setToastMsg({ text: 'Failed to contact Cloud Server', type: 'error' });
       }
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.includes('campaign') || key.includes('smm'))) {
-          const val = localStorage.getItem(key);
-          try {
-            const p = JSON.parse(val || '');
-            if (Array.isArray(p) && p.length > 0 && p[0].batches) {
-              setCampaigns(p);
-              fetch('/api/campaigns/sync-cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ clientCampaigns: p })
-              });
-              setToastMsg({ text: `Recovered ${p.length} campaigns from browser key "${key}"!`, type: 'success' });
-              setIsImportModalOpen(false);
-              return;
-            }
-          } catch (e) {}
-        }
-      }
-      setToastMsg({ text: 'No cached campaigns found in this browser storage.', type: 'info' });
     } catch (err: any) {
       setToastMsg({ text: err.message, type: 'error' });
     }
@@ -856,16 +830,18 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
 
     return true;
   }).sort((a, b) => {
+    const aBatches = Array.isArray(a.batches) ? a.batches : [];
+    const bBatches = Array.isArray(b.batches) ? b.batches : [];
     if (sortBy === 'progress') {
-      const aDone = a.batches.filter(x => x.status === 'success').length / (a.batches.length || 1);
-      const bDone = b.batches.filter(x => x.status === 'success').length / (b.batches.length || 1);
+      const aDone = aBatches.filter(x => x.status === 'success').length / (aBatches.length || 1);
+      const bDone = bBatches.filter(x => x.status === 'success').length / (bBatches.length || 1);
       return bDone - aDone;
     }
     if (sortBy === 'name') {
-      return a.name.localeCompare(b.name);
+      return (a.name || '').localeCompare(b.name || '');
     }
     if (sortBy === 'batches') {
-      return b.batches.length - a.batches.length;
+      return bBatches.length - aBatches.length;
     }
     return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
   });
@@ -1093,12 +1069,12 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
       targetUrl: campaign.targetUrl,
       handle: campaign.handle,
       autoPauseOnServiceFailure: campaign.autoPauseOnServiceFailure !== false,
-      views: campaign.metrics.views,
-      likes: campaign.metrics.likes,
-      comments: campaign.metrics.comments,
-      shares: campaign.metrics.shares,
-      saves: campaign.metrics.saves,
-      reposts: campaign.metrics.reposts,
+      views: campaign.metrics?.views ?? 1000,
+      likes: campaign.metrics?.likes ?? 50,
+      comments: 0,
+      shares: campaign.metrics?.shares ?? 20,
+      saves: campaign.metrics?.saves ?? 10,
+      reposts: campaign.metrics?.reposts ?? 2,
       durationHours: campaign.durationHours || 24,
       minMins: campaign.cadenceRange?.minMins || 20,
       maxMins: campaign.cadenceRange?.maxMins || 35,
@@ -1241,7 +1217,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
   // Calculate next scheduled batch countdown
   const getNextBatchCountdown = (campaign: Campaign) => {
     if (campaign.status !== 'running') return { text: 'Paused / Inactive', seconds: 0 };
-    const nextPending = campaign.batches.find(b => b.status === 'pending');
+    const nextPending = (campaign.batches || []).find(b => b.status === 'pending');
     if (!nextPending) return { text: 'All Batches Delivered', seconds: 0 };
 
     const scheduledMs = new Date(nextPending.scheduledAt).getTime();
@@ -1591,7 +1567,7 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                         : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
                     }`}
                   >
-                    {f === 'auto_paused' ? 'Auto-Paused' : f.charAt(0).toUpperCase() + f.slice(1)}
+                    {f === 'auto_paused' ? 'Auto-Paused' : f ? f.charAt(0).toUpperCase() + f.slice(1) : ''}
                   </button>
                 ))}
               </div>
@@ -2410,9 +2386,9 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                         </span>
                       </div>
                       <p className="text-xs text-amber-200/90 mt-1 leading-relaxed">
-                        Provider <strong>{selectedCampaign.lastAutoPause.serviceName}</strong> (Service #{selectedCampaign.lastAutoPause.serviceId}) reported:
+                        Provider <strong>{selectedCampaign.lastAutoPause.serviceName || 'SMM Provider'}</strong> (Service #{selectedCampaign.lastAutoPause.serviceId || 'N/A'}) reported:
                         <span className="font-bold text-white bg-black/40 px-1.5 py-0.5 rounded ml-1 border border-amber-500/30">
-                          "{selectedCampaign.lastAutoPause.error}"
+                          "{selectedCampaign.lastAutoPause.error || 'Provider temporarily unavailable'}"
                         </span>
                       </p>
                       <p className="text-[10px] text-amber-400/80 mt-1">
@@ -4069,19 +4045,19 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
                 </button>
               </div>
 
-              {/* Method 2: Scan Browser Storage */}
+              {/* Method 2: Direct Sync From Cloud Server */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="font-bold text-slate-200">Option 2: Deep Scan Local Browser Cache</div>
+                <div className="font-bold text-slate-200">Option 2: Direct Sync From Cloud Server</div>
                 <p className="text-[11px] text-slate-400">
-                  Scans this browser's localStorage for any previous campaign backups or cached queues.
+                  Refreshes all active campaigns directly from the persistent cloud server storage.
                 </p>
                 <button
                   type="button"
-                  onClick={handleCheckBrowserStorage}
-                  className="w-full py-2 px-3 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  onClick={handleRefreshFromCloudServer}
+                  className="w-full py-2 px-3 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Scan Local Browser Storage</span>
+                  <span>Sync Directly From Cloud Server</span>
                 </button>
               </div>
 
@@ -4201,19 +4177,19 @@ export const ActiveSchedulerView: React.FC<ActiveSchedulerProps> = ({
               <div className="pt-2 border-t border-slate-900 grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
                   <span className="text-[10px] text-slate-500">Pacing Curve:</span>
-                  <div className="text-white font-bold capitalize">{reportCampaign.curve.replace('_', ' ')}</div>
+                  <div className="text-white font-bold capitalize">{(reportCampaign.curve || 'standard').replace(/_/g, ' ')}</div>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-500">Anti-Detection:</span>
-                  <div className="text-emerald-400 font-bold">±{reportCampaign.jitterPercent}% Jitter Safe</div>
+                  <div className="text-emerald-400 font-bold">±{reportCampaign.jitterPercent ?? 15}% Jitter Safe</div>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-500">Campaign Status:</span>
-                  <div className="text-cyan-400 font-bold uppercase">{reportCampaign.status}</div>
+                  <div className="text-cyan-400 font-bold uppercase">{(reportCampaign.status || 'running').toUpperCase()}</div>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-500">Launch Date:</span>
-                  <div className="text-slate-300">{new Date(reportCampaign.createdAt).toLocaleDateString()}</div>
+                  <div className="text-slate-300">{reportCampaign.createdAt ? new Date(reportCampaign.createdAt).toLocaleDateString() : 'Just now'}</div>
                 </div>
               </div>
             </div>

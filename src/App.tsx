@@ -48,20 +48,17 @@ export default function App() {
     }
   ]);
 
-  // Initial active campaigns (with localStorage fallback)
-  const [campaigns, setCampaigns] = useState<Campaign[]>(() => {
-    try {
-      const saved = localStorage.getItem('smm_campaigns_cache');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {}
-    return [];
-  });
+  // Initial active campaigns directly from cloud server
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
 
-  // Sync panels & campaigns from server (with non-destructive anti-wipe merge from browser cache)
+  // Sync panels & campaigns from server (pure cloud source-of-truth)
   useEffect(() => {
+    // Purge any legacy browser localStorage cache so old test data is never resurrected
+    try {
+      localStorage.removeItem('smm_campaigns_cache');
+      localStorage.removeItem('smm_campaigns');
+    } catch (e) {}
+
     const loadServerData = async () => {
       try {
         const res = await fetch('/api/panels');
@@ -74,59 +71,11 @@ export default function App() {
       } catch (e) {}
 
       try {
-        // Read client cache first
-        let cachedCampaigns: Campaign[] = [];
-        try {
-          const saved = localStorage.getItem('smm_campaigns_cache');
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed)) cachedCampaigns = parsed;
-          }
-        } catch (e) {}
-
         const res = await fetch('/api/campaigns');
         if (res.ok) {
           const data = await res.json();
-          const serverCampaigns: Campaign[] = Array.isArray(data.campaigns) ? data.campaigns : [];
-
-          // Non-destructive Union Merge: Never drop campaigns that exist in client or server
-          const campaignMap = new Map<string, Campaign>();
-          
-          // Seed with cached campaigns
-          cachedCampaigns.forEach(c => {
-            if (c && c.id) campaignMap.set(c.id, c);
-          });
-
-          // Merge with server campaigns
-          serverCampaigns.forEach(s => {
-            if (s && s.id) {
-              const existing = campaignMap.get(s.id);
-              if (!existing) {
-                campaignMap.set(s.id, s);
-              } else {
-                // If server has more recent dispatch or identical, prefer server
-                const sSuccess = s.batches?.filter(b => b.status === 'success').length || 0;
-                const eSuccess = existing.batches?.filter(b => b.status === 'success').length || 0;
-                if (sSuccess >= eSuccess) {
-                  campaignMap.set(s.id, s);
-                }
-              }
-            }
-          });
-
-          const mergedCampaigns = Array.from(campaignMap.values());
-          if (mergedCampaigns.length > 0) {
-            setCampaigns(mergedCampaigns);
-            try {
-              localStorage.setItem('smm_campaigns_cache', JSON.stringify(mergedCampaigns));
-            } catch (e) {}
-
-            // Persist the full merged set to server files immediately
-            fetch('/api/campaigns/sync-cache', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ clientCampaigns: mergedCampaigns })
-            }).catch(() => {});
+          if (Array.isArray(data.campaigns)) {
+            setCampaigns(data.campaigns);
           }
         }
       } catch (e) {
@@ -137,49 +86,22 @@ export default function App() {
     loadServerData();
   }, []);
 
-  // 24/7 background sync: Pull server state while preserving all client campaigns
+  // 24/7 background sync: Pull live server state directly from cloud storage
   useEffect(() => {
     const syncWorker = setInterval(async () => {
       try {
         const res = await fetch('/api/campaigns');
         if (res.ok) {
           const data = await res.json();
-          if (data.campaigns && Array.isArray(data.campaigns) && data.campaigns.length > 0) {
-            setCampaigns(prev => {
-              const map = new Map<string, Campaign>();
-              // Keep all existing client campaigns
-              prev.forEach(c => { if (c && c.id) map.set(c.id, c); });
-              // Update with server dispatches
-              data.campaigns.forEach((sc: Campaign) => {
-                if (sc && sc.id) map.set(sc.id, sc);
-              });
-              const updated = Array.from(map.values());
-              try {
-                localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated));
-              } catch (e) {}
-              return updated;
-            });
+          if (Array.isArray(data.campaigns)) {
+            setCampaigns(data.campaigns);
           }
         }
       } catch (e) {}
-    }, 6000);
+    }, 5000);
 
     return () => clearInterval(syncWorker);
   }, []);
-
-  // Save campaigns to localStorage whenever changed & sync to server disk
-  useEffect(() => {
-    try {
-      if (campaigns.length > 0) {
-        localStorage.setItem('smm_campaigns_cache', JSON.stringify(campaigns));
-        fetch('/api/campaigns/sync-cache', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientCampaigns: campaigns })
-        }).catch(() => {});
-      }
-    } catch (e) {}
-  }, [campaigns]);
 
   // Handle successful campaign launch
   const handleLaunchSuccess = (launched: Campaign | Campaign[]) => {
@@ -243,9 +165,6 @@ export default function App() {
         const data = await res.json();
         if (data.campaigns && Array.isArray(data.campaigns)) {
           setCampaigns(data.campaigns);
-          try {
-            localStorage.setItem('smm_campaigns_cache', JSON.stringify(data.campaigns));
-          } catch (e) {}
           return;
         }
       }
@@ -253,16 +172,10 @@ export default function App() {
       console.warn('Delete campaign error:', e);
     }
 
-    setCampaigns(prev => {
-      const updated = prev.filter(c => c.id !== campaignId);
-      try {
-        localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
+    setCampaigns(prev => prev.filter(c => c.id !== campaignId));
   };
 
-  // Edit campaign: Update properties on server and cache
+  // Edit campaign: Update properties on server
   const handleEditCampaign = async (updatedCampaign: Campaign) => {
     try {
       const res = await fetch(`/api/campaigns/${updatedCampaign.id}`, {
@@ -272,11 +185,7 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        setCampaigns(prev => {
-          const updated = prev.map(c => c.id === updatedCampaign.id ? data.campaign : c);
-          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
-          return updated;
-        });
+        setCampaigns(prev => prev.map(c => c.id === updatedCampaign.id ? data.campaign : c));
       }
     } catch (e) {
       console.error('Failed to save campaign edit', e);
@@ -305,11 +214,7 @@ export default function App() {
 
       const data = await res.json();
       if (data.campaign) {
-        setCampaigns(prev => {
-          const updated = [data.campaign, ...prev];
-          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (e) {}
-          return updated;
-        });
+        setCampaigns(prev => [data.campaign, ...prev]);
         return data.campaign;
       }
     } catch (e: any) {
@@ -326,19 +231,7 @@ export default function App() {
           currentBatchIndex: 0
         };
 
-        setCampaigns(prev => {
-          const updated = [fallbackClone, ...prev];
-          try { localStorage.setItem('smm_campaigns_cache', JSON.stringify(updated)); } catch (err) {}
-          return updated;
-        });
-
-        // Trigger background sync to server
-        fetch('/api/campaigns/sync-cache', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientCampaigns: [fallbackClone] })
-        }).catch(() => {});
-
+        setCampaigns(prev => [fallbackClone, ...prev]);
         return fallbackClone;
       }
       throw e;

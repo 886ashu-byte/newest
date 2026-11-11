@@ -282,12 +282,12 @@ function loadPersistedData() {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       const data = JSON.parse(raw);
-      if (Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+      if (Array.isArray(data.campaigns)) {
         campaigns = data.campaigns;
         loaded = true;
       }
       if (Array.isArray(data.panels) && data.panels.length > 0) panels = data.panels;
-      if (Array.isArray(data.dispatchLogs) && data.dispatchLogs.length > 0) dispatchLogs = data.dispatchLogs;
+      if (Array.isArray(data.dispatchLogs)) dispatchLogs = data.dispatchLogs;
       if (data.routingGateConfig) routingGateConfig = { ...routingGateConfig, ...data.routingGateConfig };
       if (data.livePanelPricing) livePanelPricing = { ...livePanelPricing, ...data.livePanelPricing };
     }
@@ -296,7 +296,7 @@ function loadPersistedData() {
     if (!loaded && fs.existsSync(BACKUP_FILE)) {
       const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
       const data = JSON.parse(raw);
-      if (Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+      if (Array.isArray(data.campaigns)) {
         campaigns = data.campaigns;
         console.log(`[Persistence] Loaded ${campaigns.length} campaigns from root backup store.`);
       }
@@ -1145,6 +1145,17 @@ app.get('/api/campaigns/storage-status', (req: Request, res: Response) => {
     backupStoreExists: backupExists,
     timestamp: new Date().toISOString()
   });
+});
+
+// CAMPAIGNS: Clear all campaigns (resets cloud storage to clean slate)
+app.post('/api/campaigns/clear-all', (req: Request, res: Response) => {
+  for (const c of campaigns) {
+    cancelCampaignTimers(c.id);
+  }
+  campaigns = [];
+  dispatchLogs = [];
+  persistData();
+  res.json({ success: true, count: 0, message: 'All campaigns and logs cleared from cloud storage.' });
 });
 
 // CAMPAIGNS: Create & Launch
